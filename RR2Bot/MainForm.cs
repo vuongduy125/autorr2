@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using RR2Bot.Core;
 using RR2Bot.Models;
 using RR2Bot.Modules;
@@ -12,8 +13,9 @@ public partial class MainForm : Form
     private CancellationTokenSource? _cts;
     private Task? _botTask;
 
-    // Status check timer
     private readonly System.Windows.Forms.Timer _statusTimer;
+    private readonly System.Windows.Forms.Timer _logFlushTimer;
+    private readonly ConcurrentQueue<(string msg, Color color)> _logQueue = new();
 
     public MainForm()
     {
@@ -22,6 +24,10 @@ public partial class MainForm : Form
         _statusTimer = new System.Windows.Forms.Timer { Interval = 2000 };
         _statusTimer.Tick += StatusTimer_Tick;
         _statusTimer.Start();
+
+        _logFlushTimer = new System.Windows.Forms.Timer { Interval = 300 };
+        _logFlushTimer.Tick += LogFlushTimer_Tick;
+        _logFlushTimer.Start();
     }
 
     // ── Button handlers ──────────────────────────────────────────────────────
@@ -115,13 +121,32 @@ public partial class MainForm : Form
 
     private void AppendLog(string msg, Color? color = null)
     {
-        if (InvokeRequired) { Invoke(() => AppendLog(msg, color)); return; }
-
         var ts = DateTime.Now.ToString("HH:mm:ss");
-        rtbLog.SelectionStart  = rtbLog.TextLength;
-        rtbLog.SelectionLength = 0;
-        rtbLog.SelectionColor  = color ?? Color.LightGreen;
-        rtbLog.AppendText($"[{ts}] {msg}{Environment.NewLine}");
+        _logQueue.Enqueue(($"[{ts}] {msg}", color ?? Color.LightGreen));
+    }
+
+    private void LogFlushTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_logQueue.IsEmpty) return;
+
+        rtbLog.SuspendLayout();
+        while (_logQueue.TryDequeue(out var entry))
+        {
+            rtbLog.SelectionStart  = rtbLog.TextLength;
+            rtbLog.SelectionLength = 0;
+            rtbLog.SelectionColor  = entry.color;
+            rtbLog.AppendText(entry.msg + Environment.NewLine);
+        }
+
+        // Trim to last 500 lines to avoid memory growth
+        const int maxLines = 500;
+        if (rtbLog.Lines.Length > maxLines)
+        {
+            var kept = rtbLog.Lines[^maxLines..];
+            rtbLog.Lines = kept;
+        }
+
+        rtbLog.ResumeLayout();
         rtbLog.ScrollToCaret();
     }
 

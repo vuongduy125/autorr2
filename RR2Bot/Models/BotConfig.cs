@@ -74,7 +74,7 @@ public class BotConfig
 
     // ── Loop intervals ────────────────────────────────────────────────────────
     public int BaseLoopIntervalMs   { get; set; } = 5000;
-    public int BattleLoopIntervalMs { get; set; } = 1500;
+    public int BattleLoopIntervalMs { get; set; } = 200;
 }
 
 public enum BotMode { BaseOnly, BattleOnly, Both }
