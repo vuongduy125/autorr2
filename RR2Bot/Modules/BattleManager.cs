@@ -144,7 +144,7 @@ public class BattleManager
     // ── Hero movement ─────────────────────────────────────────────────────────
 
     private void MoveToward(double targetX, double targetY)
-        => _adb.TapRatio(targetX, targetY);
+        => _adb.LongPress((int)(targetX * _adb.ScreenWidth), (int)(targetY * _adb.ScreenHeight), 1500);
 
     public void MoveHero(HeroDirection dir = HeroDirection.Forward)
     {

@@ -39,8 +39,8 @@ public class BotConfig
     public int    HeroMoveDurationMs { get; set; } = 800;
 
     // Tap target để hero pathfind đến — upper-right của màn hình
-    public double HeroTargetXRatio { get; set; } = 0.61;
-    public double HeroTargetYRatio { get; set; } = 0.36;
+    public double HeroTargetXRatio { get; set; } = 0.65;
+    public double HeroTargetYRatio { get; set; } = 0.25;
 
     // HP bar detection
     public double HpBarYRatio        { get; set; } = 0.30;  // y của thanh HP (≈280px/900)
@@ -74,7 +74,7 @@ public class BotConfig
 
     // ── Loop intervals ────────────────────────────────────────────────────────
     public int BaseLoopIntervalMs   { get; set; } = 5000;
-    public int BattleLoopIntervalMs { get; set; } = 900;
+    public int BattleLoopIntervalMs { get; set; } = 1500;
 }
 
 public enum BotMode { BaseOnly, BattleOnly, Both }
