@@ -50,91 +50,63 @@ public class BattleManager
         {
             try
             {
-                switch (_state)
+                switch (BotState.InBattle)
                 {
-                    case BotState.AtBase:
-                        Log("State: AtBase → entering battle...");
-                        bool entered = await EnterBattleAsync(ct);
-                        if (entered)
-                        {
-                            _state = BotState.EnteringBattle;
-                            _enteringBattleAt = DateTime.Now;
-                            Log("Waiting for battle HUD...");
-                        }
-                        else
-                        {
-                            Log("EnterBattle failed, retrying in 5s...");
-                            await Task.Delay(5000, ct);
-                        }
-                        break;
-
-                    case BotState.EnteringBattle:
-                        await Task.Delay(1000, ct);
-                        if (IsBattleHudVisible())
-                        {
-                            Log("Battle HUD detected → starting actions.");
-                            _state = BotState.InBattle;
-                        }
-                        else if ((DateTime.Now - _enteringBattleAt).TotalSeconds > 30)
-                        {
-                            Log("Timeout waiting for battle HUD → back to AtBase.");
-                            _state = BotState.AtBase;
-                        }
-                        break;
-
+     
                     case BotState.InBattle:
                         var screen = ScreenCapture.CaptureWindow(_cfg.WindowTitle);
                         if (screen == null) { await Task.Delay(1000, ct); break; }
 
-                        if (!IsBattleHudVisible(screen))
-                        {
-                            _hudMissCount++;
-                            if (_hudMissCount < 2)
-                            {
-                                Log($"Battle HUD miss #{_hudMissCount} — waiting to confirm...");
-                                screen.Dispose();
-                                await Task.Delay(_cfg.BattleLoopIntervalMs, ct);
-                                break;
-                            }
-                            Log("Battle HUD gone (confirmed) → battle over, returning to base.");
-                            screen.Dispose();
-                            _hudMissCount = 0;
-                            _state = BotState.AtBase;
-                            await Task.Delay(3000, ct);
-                            break;
-                        }
+                        //if (!IsBattleHudVisible(screen))
+                        //{
+                        //    _hudMissCount++;
+                        //    if (_hudMissCount < 2)
+                        //    {
+                        //        Log($"Battle HUD miss #{_hudMissCount} — waiting to confirm...");
+                        //        screen.Dispose();
+                        //        await Task.Delay(_cfg.BattleLoopIntervalMs, ct);
+                        //        break;
+                        //    }
+                        //    Log("Battle HUD gone (confirmed) → battle over, returning to base.");
+                        //    screen.Dispose();
+                        //    _hudMissCount = 0;
+                        //    _state = BotState.AtBase;
+                        //    await Task.Delay(3000, ct);
+                        //    break;
+                        //}
                         _hudMissCount = 0;
 
                         // Kiểm tra Victory/Defeat trước
-                        if (IsBattleOver(screen))
-                        {
-                            Log("Victory/Defeat detected → returning to base.");
-                            screen.Dispose();
-                            _state = BotState.AtBase;
-                            await Task.Delay(3000, ct);
-                            break;
-                        }
+                        //if (IsBattleOver(screen))
+                        //{
+                        //    Log("Victory/Defeat detected → returning to base.");
+                        //    screen.Dispose();
+                        //    _state = BotState.AtBase;
+                        //    await Task.Delay(3000, ct);
+                        //    break;
+                        //}
 
-                        bool enemyNearby = HasEnemyHpBar(screen);
-                        bool hpLow = IsHpLow(screen);
-                        Log($"Enemy nearby: {enemyNearby} | HP low: {hpLow}");
+                        //bool enemyNearby = HasEnemyHpBar(screen);
+                        //bool hpLow = IsHpLow(screen);
+                        //Log($"Enemy nearby: {enemyNearby} | HP low: {hpLow}");
 
-                        if (hpLow)
-                        {
-                            Log("HP low! Spamming spells.");
-                            UseReadySpells(screen);
-                            UseReadySpells(screen);
-                        }
-                        else if (enemyNearby)
-                        {
-                            Log("Fighting enemy.");
-                            UseReadySpells(screen);
-                        }
-                        else
-                        {
+                        //if (hpLow)
+                        //{
+                        //    Log("HP low! Spamming spells.");
+                        //    UseReadySpells(screen);
+                        //    UseReadySpells(screen);
+                        //}
+                        //else if (enemyNearby)
+                        //{
+                        //    Log("Fighting enemy.");F
+                        //    UseReadySpells(screen);
+                        //}
+                        //else
+                        //{
                             Log("Path clear → moving forward.");
-                            MoveHeroByWaypoint();
-                        }
+                            
+                            UseReadySpells(screen);
+                        //}
 
                         SummonTroops();
                         screen.Dispose();
@@ -155,9 +127,9 @@ public class BattleManager
     /// </summary>
     private void MoveHeroByWaypoint()
     {
-        _adb.TapRatio(_cfg.HeroTargetXRatio, _cfg.HeroTargetYRatio);
+        _adb.LongPress(0.75, 0.25, 5000);
+        Log("shieeet");
         Thread.Sleep(100);
-        _adb.TapRatio(_cfg.HeroTargetXRatio, _cfg.HeroTargetYRatio);
     }
 
     public void MoveHero(HeroDirection dir = HeroDirection.Forward)
@@ -192,6 +164,8 @@ public class BattleManager
     /// </summary>
     public void UseReadySpells(Bitmap? screen = null)
     {
+        //var isValid = HasEnemyHpBar(screen);
+
         foreach (var (x, y) in _cfg.SpellButtonRatios)
         {
             if (screen != null)
@@ -200,12 +174,19 @@ public class BattleManager
                 if (spellTpl != null)
                 {
                     var (ready, _, _) = ImageMatcher.FindTemplate(screen, spellTpl, 0.75);
-                    if (!ready) continue;
+                    if (!ready)
+                    {
+                        continue;
+                    }
+                }
+                else
+                {
+                    MoveHeroByWaypoint();
                 }
             }
 
-            _adb.TapRatio(x, y);
-            Thread.Sleep(80);
+           //if(isValid)
+           _adb.TapRatio(x, y);
         }
     }
 

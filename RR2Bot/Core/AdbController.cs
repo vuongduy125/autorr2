@@ -90,8 +90,8 @@ public class AdbController : IDisposable
     public void Swipe(int x1, int y1, int x2, int y2, int durationMs = 200)
         => Shell($"input swipe {x1} {y1} {x2} {y2} {durationMs}");
 
-    public void LongPress(int x, int y, int durationMs = 1000)
-        => Shell($"input swipe {x} {y} {x} {y} {durationMs}");
+    public void LongPress(double x, double y, int durationMs = 1000)
+        => Shell($"input swipe {(int)(ScreenWidth * x)} {(int)(ScreenHeight * y)} {(int)(ScreenWidth * x)} {(int)(ScreenHeight * y)} {durationMs}");
 
     public void KeyEvent(int keyCode)
         => Shell($"input keyevent {keyCode}");
