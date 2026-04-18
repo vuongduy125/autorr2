@@ -27,12 +27,6 @@ public static class ScreenCapture
     private static extern bool BitBlt(IntPtr hdcDest, int xDest, int yDest, int w, int h,
         IntPtr hdcSrc, int xSrc, int ySrc, uint dwRop);
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint dwFlags);
-
-    [DllImport("shcore.dll")]
-    private static extern int GetDpiForMonitor(IntPtr hMonitor, int dpiType, out uint dpiX, out uint dpiY);
-
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT { public int Left, Top, Right, Bottom; }
 
@@ -40,7 +34,6 @@ public static class ScreenCapture
     private struct POINT { public int X, Y; }
 
     private const uint SRCCOPY = 0x00CC0020;
-    private const uint MONITOR_DEFAULTTONEAREST = 2;
 
     #endregion
 
@@ -57,21 +50,12 @@ public static class ScreenCapture
         int logicalH = rect.Bottom - rect.Top;
         if (logicalW <= 0 || logicalH <= 0) return null;
 
-        // Tính DPI scale của monitor chứa cửa sổ
-        var hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
-        double scale = 1.0;
-        if (GetDpiForMonitor(hMonitor, 0, out uint dpiX, out _) == 0)
-            scale = dpiX / 96.0;
-
-        int physicalW = (int)(logicalW * scale);
-        int physicalH = (int)(logicalH * scale);
-
-        var bmp = new Bitmap(physicalW, physicalH, PixelFormat.Format32bppArgb);
+        var bmp = new Bitmap(logicalW, logicalH, PixelFormat.Format32bppArgb);
         using var g = Graphics.FromImage(bmp);
         var hdcDest = g.GetHdc();
         var hdcSrc  = GetDC(hWnd);
 
-        BitBlt(hdcDest, 0, 0, physicalW, physicalH, hdcSrc, 0, 0, SRCCOPY);
+        BitBlt(hdcDest, 0, 0, logicalW, logicalH, hdcSrc, 0, 0, SRCCOPY);
 
         ReleaseDC(hWnd, hdcSrc);
         g.ReleaseHdc(hdcDest);
