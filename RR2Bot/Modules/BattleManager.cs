@@ -1,20 +1,26 @@
 using System.Drawing;
-using System.Drawing.Imaging;
-using System.Runtime.InteropServices;
 using RR2Bot.Core;
 using RR2Bot.Models;
 
 namespace RR2Bot.Modules;
 
+/// <summary>
+/// Battle automation: di chuyển hero qua joystick swipe, dùng spell, triệu quân.
+/// </summary>
 public class BattleManager
 {
     private readonly AdbController _adb;
     private readonly BotConfig _cfg;
     private Action<string>? _log;
 
-    private const string TplSpellReady = "spell_ready.png";
-    private const string TplVictory    = "victory.png";
-    private const string TplDefeat     = "defeat.png";
+    // Template tên — để vào thư mục Templates/
+    private const string TplBattleUI = "battle_ui.png";     // HUD chỉ xuất hiện trong battle
+    private const string TplSpellReady = "spell_ready.png";   // spell đã cool down xong
+    private const string TplHeroHealth = "hero_hp_low.png";   // máu hero thấp (tùy chọn)
+    private const string TplVictory = "victory.png";
+    private const string TplDefeat = "defeat.png";
+
+    private readonly Random _rng = new();
 
     public BattleManager(AdbController adb, BotConfig cfg, Action<string>? log = null)
     {
@@ -23,14 +29,19 @@ public class BattleManager
         _log = log;
     }
 
-    // ── State machine ─────────────────────────────────────────────────────────
+    // ── Main loop ────────────────────────────────────────────────────────────
 
     private enum BotState { AtBase, EnteringBattle, InBattle }
     private BotState _state = BotState.AtBase;
     private DateTime _enteringBattleAt;
 
+    // Waypoint tracking
+    private int _wpIndex = 0;
+    private DateTime _wpDeadline = DateTime.MinValue;
+
+    // HUD exit hysteresis — require 2 consecutive misses before leaving InBattle
     private int _hudMissCount = 0;
-    private DateTime _battleStartAt;
+    private DateTime _lastMoveTime = DateTime.MinValue;
 
     public async Task RunAsync(CancellationToken ct)
     {
@@ -42,38 +53,9 @@ public class BattleManager
                 switch (BotState.InBattle)
                 {
 
-                    case BotState.AtBase:
-                        Log("State: AtBase → entering battle...");
-                        bool entered = await EnterBattleAsync(ct);
-                        if (entered)
-                        {
-                            _state = BotState.EnteringBattle;
-                            _enteringBattleAt = DateTime.Now;
-                            Log("Waiting for battle HUD...");
-                        }
-                        else
-                        {
-                            Log("EnterBattle failed, retrying in 5s...");
-                            await Task.Delay(5000, ct);
-                        }
-                        break;
-
-                    case BotState.EnteringBattle:
-                        await Task.Delay(1000, ct);
-                        if (IsBattleHudVisible())
-                        {
-                            Log("Battle HUD detected → starting actions.");
-                            _hudMissCount = 0;
-                            _battleStartAt = DateTime.Now;
-                            _state = BotState.InBattle;
-                        }
-                        else if ((DateTime.Now - _enteringBattleAt).TotalSeconds > 30)
-                        {
-                            Log("Timeout waiting for battle HUD → back to AtBase.");
-                            _state = BotState.AtBase;
-                        }
-                        break;
-
+                    case BotState.InBattle:
+                        var screen = ScreenCapture.CaptureWindow(_cfg.WindowTitle);
+                        if (screen == null) { await Task.Delay(1000, ct); break; }
 
                         //if (!IsBattleHudVisible(screen))
                         //{
@@ -121,13 +103,12 @@ public class BattleManager
                         //}
                         //else
                         //{
-                            Log("Path clear → moving forward.");
-                            
-                            UseReadySpells(screen);
+                        Log("Path clear → moving forward.");
+
+                        UseReadySpells(screen);
                         //}
 
                         SummonTroops();
-
                         screen.Dispose();
                         await Task.Delay(_cfg.BattleLoopIntervalMs, ct);
                         break;
@@ -139,8 +120,7 @@ public class BattleManager
         Log("BattleManager stopped.");
     }
 
-    // ── Hero movement ─────────────────────────────────────────────────────────
-
+    // ── Hero movement ────────────────────────────────────────────────────────
 
     /// <summary>
     /// Di chuyển hero theo hướng chỉ định bằng cách swipe joystick.
@@ -152,35 +132,36 @@ public class BattleManager
         Thread.Sleep(100);
     }
 
-
     public void MoveHero(HeroDirection dir = HeroDirection.Forward)
     {
-        double cx = _cfg.JoystickXRatio;
-        double cy = _cfg.JoystickYRatio;
-        double rx = _cfg.JoystickRadiusX;
-        double ry = _cfg.JoystickRadiusY;
+        double fromX = _cfg.HeroMoveFromX;
+        double toX = _cfg.HeroMoveToX;
+        double y = _cfg.HeroMoveY;
 
-        var (toX, toY) = dir switch
+        var (x1, y1, x2, y2) = dir switch
         {
-            HeroDirection.Forward  => (cx + rx, cy),
-            HeroDirection.Backward => (cx - rx, cy),
-            HeroDirection.Up       => (cx,      cy - ry),
-            HeroDirection.Down     => (cx,      cy + ry),
-            HeroDirection.UpRight  => (cx + rx, cy - ry),
-            HeroDirection.UpLeft   => (cx - rx, cy - ry),
-            _ => (cx + rx, cy),
+            HeroDirection.Forward => (fromX, y, toX, y),
+            HeroDirection.Backward => (toX, y, fromX, y),
+            HeroDirection.Up => (fromX, y, fromX, y - 0.15),
+            HeroDirection.Down => (fromX, y, fromX, y + 0.15),
+            HeroDirection.UpRight => (fromX, y, toX, y - 0.10),
+            HeroDirection.UpLeft => (toX, y, fromX, y - 0.10),
+            _ => (fromX, y, toX, y),
         };
 
-        _adb.SwipeRatio(cx, cy, toX, toY, _cfg.HeroMoveDurationMs);
+        _adb.SwipeRatio(x1, y1, x2, y2, _cfg.HeroMoveDurationMs);
     }
 
     public void MoveHeroTo(double targetXRatio, double targetYRatio)
-        => _adb.SwipeRatio(_cfg.JoystickXRatio, _cfg.JoystickYRatio, targetXRatio, targetYRatio, 200);
+    {
+        _adb.SwipeRatio(_cfg.JoystickXRatio, _cfg.JoystickYRatio, targetXRatio, targetYRatio, 200);
+    }
 
-    // ── Spells ────────────────────────────────────────────────────────────────
+    // ── Spell ────────────────────────────────────────────────────────────────
 
-    // Global gate: nếu spell_ready.png tồn tại, chỉ cast khi tìm thấy trên màn hình.
-    // Nếu không có template → spam tất cả slot (game tự bỏ qua slot đang cooldown).
+    /// <summary>
+    /// Dùng tất cả spell đang ready (dựa vào template matching hoặc click mù).
+    /// </summary>
     public void UseReadySpells(Bitmap? screen = null)
     {
         //var isValid = HasEnemyHpBar(screen);
@@ -204,11 +185,14 @@ public class BattleManager
                 }
             }
 
-           //if(isValid)
-           _adb.TapRatio(x, y);
+            //if(isValid)
+            _adb.TapRatio(x, y);
         }
     }
 
+    /// <summary>
+    /// Dùng spell theo index (0-based).
+    /// </summary>
     public void UseSpell(int index)
     {
         if (index < 0 || index >= _cfg.SpellButtonRatios.Length) return;
@@ -216,8 +200,11 @@ public class BattleManager
         _adb.TapRatio(x, y);
     }
 
-    // ── Troops ────────────────────────────────────────────────────────────────
+    // ── Troop summon ──────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Triệu tất cả loại quân (click lần lượt các nút troop).
+    /// </summary>
     public void SummonTroops()
     {
         foreach (var (x, y) in _cfg.TroopButtonRatios)
@@ -234,7 +221,7 @@ public class BattleManager
         _adb.TapRatio(x, y);
     }
 
-    // ── Detection (LockBits — không dùng GetPixel) ───────────────────────────
+    // ── Detection ─────────────────────────────────────────────────────────────
 
     private bool IsBattleHudVisible(Bitmap? screen = null)
     {
@@ -242,61 +229,51 @@ public class BattleManager
         var bmp = screen ?? ScreenCapture.CaptureWindow(_cfg.WindowTitle);
         if (bmp == null) return false;
 
-        var pixels = LockPixels(bmp, out int stride);
-
-        // Mana bar: 6 điểm mẫu dọc theo y=94% — màu xanh dương
+        // Indicator 1: thanh mana xanh dương ở bottom
         int blueCount = 0;
         foreach (var xr in new[] { 0.05, 0.10, 0.15, 0.20, 0.25, 0.30 })
         {
-            int px = (int)(bmp.Width  * xr);
+            int px = (int)(bmp.Width * xr);
             int py = (int)(bmp.Height * 0.94);
             if (px >= bmp.Width || py >= bmp.Height) continue;
-            int i = py * stride + px * 4;
-            byte b = pixels[i], r = pixels[i + 2];
-            if (b > 100 && r < 100 && b > r + 60) blueCount++;
+            var c = bmp.GetPixel(px, py);
+            if (c.B > 100 && c.R < 100 && c.B > c.R + 60) blueCount++;
         }
+        bool manaVisible = blueCount >= 3;
 
-        // Nút Pause (II) góc trên-trái
+        // Indicator 2: nút Pause (II) góc trên-trái — vòng tròn xanh dương
         bool pauseVisible = false;
         {
-            int px = (int)(bmp.Width  * 0.043);
+            int px = (int)(bmp.Width * 0.043);
             int py = (int)(bmp.Height * 0.267);
             if (px < bmp.Width && py < bmp.Height)
             {
-                int i = py * stride + px * 4;
-                byte b = pixels[i], g = pixels[i + 1], r = pixels[i + 2];
-                pauseVisible = b > 120 && r < 150 && b > g;
+                var c = bmp.GetPixel(px, py);
+                pauseVisible = c.B > 120 && c.R < 150 && c.B > c.G;
             }
         }
 
-        // Sword icon bottom-left — active hoặc disabled đều = đang trong battle
-        bool swordVisible = false;
-        {
-            int px = (int)(bmp.Width  * 0.069);
-            int py = (int)(bmp.Height * 0.828);
-            if (px < bmp.Width && py < bmp.Height)
-            {
-                int i = py * stride + px * 4;
-                byte b = pixels[i], g = pixels[i + 1], r = pixels[i + 2];
-                swordVisible = b > 100 && b > r + 30 && b > g + 20;
-            }
-        }
-
-        bool swordDisabled = false;
-        if (!swordVisible)
-        {
-            using var tpl = ImageMatcher.LoadTemplate("sword_icon_disable.png");
-            if (tpl != null)
-            {
-                var (found, _, _) = ImageMatcher.FindTemplate(bmp, tpl, 0.75);
-                swordDisabled = found;
-            }
-        }
-
-        bool inBattle = blueCount >= 1 || pauseVisible || swordVisible || swordDisabled;
-        Log($"Battle detect — mana:{blueCount}/6 pause:{pauseVisible} sword:{swordVisible} swordOff:{swordDisabled} → inBattle={inBattle}");
+        bool inBattle = blueCount >= 2 || pauseVisible;
+        Log($"Battle detect — mana:{blueCount}/6 pause:{pauseVisible} → inBattle={inBattle}");
 
         if (dispose) bmp.Dispose();
+        return inBattle;
+    }
+
+    private bool IsInBattle(Bitmap screen)
+    {
+        // Nếu thấy community icon = đang ở base = chưa vào battle
+        using var communityTpl = ImageMatcher.LoadTemplate("community_icon.png");
+        if (communityTpl != null)
+        {
+            var (atBase, _, _) = ImageMatcher.FindTemplate(screen, communityTpl, 0.75);
+            if (atBase) return false;
+        }
+
+        // Fallback: dùng battle_ui template nếu có
+        using var battleTpl = ImageMatcher.LoadTemplate(TplBattleUI);
+        if (battleTpl == null) return true;
+        var (inBattle, _, _) = ImageMatcher.FindTemplate(screen, battleTpl, 0.75);
         return inBattle;
     }
 
@@ -317,198 +294,48 @@ public class BattleManager
         return false;
     }
 
-    // Tìm HP bar địch gần nhất (hero ở center 0.5,0.5) bằng pixel scan
-    private (bool found, double x, double y) FindEnemyHpBar(Bitmap screen)
-    {
-        var pixels = LockPixels(screen, out int stride);
-        int w = screen.Width, h = screen.Height;
-        int x1 = (int)(w * 0.10), x2 = (int)(w * 0.90);
-        int y1 = (int)(h * 0.10), y2 = (int)(h * 0.60);
-
-        var candidates = new List<(int midX, int midY, int streak)>();
-
-        for (int y = y1; y < y2; y++)
-        {
-            int streak = 0, streakStart = 0;
-            int rowBase = y * stride;
-            for (int x = x1; x < x2; x++)
-            {
-                int i = rowBase + x * 4;
-                byte b = pixels[i], g = pixels[i + 1], r = pixels[i + 2];
-                if (r > 160 && g < 55 && b < 55)
-                {
-                    if (streak == 0) streakStart = x;
-                    streak++;
-                }
-                else
-                {
-                    if (streak >= 8) candidates.Add(((streakStart + x) / 2, y, streak));
-                    streak = 0;
-                }
-            }
-            if (streak >= 8) candidates.Add(((streakStart + x2) / 2, y, streak));
-        }
-
-        if (candidates.Count == 0)
-        {
-            Log("Enemy HP bar: found=False streak=0");
-            return (false, 0, 0);
-        }
-
-        // Lọc bỏ spell effects: HP bar thật chỉ dày 1-5 row liên tiếp.
-        // Đếm run liên tiếp chứa midY — lửa/spell có gap hoặc run dài hơn nhiều.
-        var realBars = new List<(int midX, int midY, int streak)>();
-        var dbgSb = new System.Text.StringBuilder();
-        foreach (var c in candidates)
-        {
-            int contig = 1;
-            for (int dy = -1; dy >= -10; dy--)
-            {
-                int sy = c.midY + dy;
-                if (sy < 0) break;
-                int ci = sy * stride + c.midX * 4;
-                byte cb = pixels[ci], cg = pixels[ci + 1], cr = pixels[ci + 2];
-                if (cr > 150 && cg < 80 && cb < 80) contig++; else break;
-            }
-            for (int dy = 1; dy <= 10; dy++)
-            {
-                int sy = c.midY + dy;
-                if (sy >= h) break;
-                int ci = sy * stride + c.midX * 4;
-                byte cb = pixels[ci], cg = pixels[ci + 1], cr = pixels[ci + 2];
-                if (cr > 150 && cg < 80 && cb < 80) contig++; else break;
-            }
-            dbgSb.Append($"({c.midX},{c.midY},s{c.streak},v{contig}) ");
-            if (contig <= 8) realBars.Add(c);
-        }
-        if (candidates.Count > 0) Log($"Candidates: {dbgSb}");
-
-        if (realBars.Count == 0)
-        {
-            Log($"Enemy HP bar: found=False (all {candidates.Count} filtered as spell effects)");
-            return (false, 0, 0);
-        }
-
-        // Chọn địch gần trung tâm nhất (hero ở 0.5, 0.5)
-        double cx = w * 0.5, cy = h * 0.5;
-        var best = realBars.MinBy(c => Math.Pow(c.midX - cx, 2) + Math.Pow(c.midY - cy, 2));
-        double rx = best.midX / (double)w;
-        double ry = Math.Min((best.midY + 50.0) / h, 0.85);
-        Log($"Enemy HP bar: found=True streak={best.streak} bars={realBars.Count} at ({rx:F2},{ry:F2})");
-
-        SaveEnemyDebug(screen, [.. realBars.Select(c => (c.midX, c.midY))], best.midX, best.midY);
-        return (true, rx, ry);
-    }
-
-    private static void SaveEnemyDebug(Bitmap screen, List<(int x, int y)> allBars, int bestX, int bestY)
-    {
-        using var dbg = new Bitmap(screen);
-        using var g = Graphics.FromImage(dbg);
-        // Vẽ tất cả candidate (vàng)
-        foreach (var (x, y) in allBars)
-            g.DrawEllipse(Pens.Yellow, x - 8, y - 8, 16, 16);
-        // Vẽ best (đỏ, to hơn)
-        g.DrawEllipse(Pens.Red, bestX - 14, bestY - 14, 28, 28);
-        g.DrawLine(Pens.Red, bestX - 14, bestY, bestX + 14, bestY);
-        g.DrawLine(Pens.Red, bestX, bestY - 14, bestX, bestY + 14);
-        SaveDebugScreen(dbg, "enemy_detect.png");
-    }
-
-    // Detect chòi/chướng ngại vật: trả về tọa độ ratio của obstacle (center HP bar)
-    // null nếu không tìm thấy
-    private static (double x, double y)? FindObstacleOnScreen(Bitmap screen)
-    {
-        var pixels = LockPixels(screen, out int stride);
-        int w = screen.Width, h = screen.Height;
-        int x1 = (int)(w * 0.10), x2 = (int)(w * 0.90);
-        int y1 = (int)(h * 0.08), y2 = (int)(h * 0.25);
-        for (int y = y1; y < y2; y++)
-        {
-            int streak = 0, streakStart = 0, rowBase = y * stride;
-            for (int x = x1; x < x2; x++)
-            {
-                int i = rowBase + x * 4;
-                byte b = pixels[i], g = pixels[i + 1], r = pixels[i + 2];
-                if (r > 160 && g < 60 && b < 60)
-                {
-                    if (streak == 0) streakStart = x;
-                    streak++;
-                    if (streak >= 45)
-                    {
-                        double cx = (streakStart + x) / 2.0 / w;
-                        // Tap thấp hơn HP bar một chút để nhắm vào thân obstacle
-                        double cy = Math.Min((y + 60.0) / h, 0.85);
-                        return (cx, cy);
-                    }
-                }
-                else streak = 0;
-            }
-        }
-        return null;
-    }
-
-    private bool IsHpLow(Bitmap screen)
-    {
-        var pixels = LockPixels(screen, out int stride);
-        int w = screen.Width, h = screen.Height;
-
-        // Hero HP bar = vivid green streak trực tiếp trên đầu hero (camera theo hero ≈ center)
-        // Cỏ: xanh mờ hơn, r và b cao hơn → dùng g>140 && r<80 && b<80 để phân biệt
-        int x1 = (int)(w * 0.28), x2 = (int)(w * 0.72);
-        int y1 = (int)(h * 0.28), y2 = (int)(h * 0.50);
-
-        int bestStreak = 0;
-        for (int y = y1; y < y2; y++)
-        {
-            int streak = 0, rowBase = y * stride;
-            for (int x = x1; x < x2; x++)
-            {
-                int i = rowBase + x * 4;
-                byte b = pixels[i], g = pixels[i + 1], r = pixels[i + 2];
-                if (g > 140 && r < 80 && b < 80) streak++;
-                else { if (streak > bestStreak) bestStreak = streak; streak = 0; }
-            }
-            if (streak > bestStreak) bestStreak = streak;
-        }
-
-        // Full bar ≈ 140px; <30px ≈ dưới 20% HP → retreat
-        Log($"Hero HP green streak={bestStreak}px → hpLow={bestStreak > 0 && bestStreak < 30}");
-        return bestStreak > 0 && bestStreak < 30;
-    }
-
     // ── Battle entry ──────────────────────────────────────────────────────────
 
     private async Task<bool> EnterBattleAsync(CancellationToken ct)
     {
         Log("Not in battle — attempting to enter...");
 
-        Log($"Tapping community icon at ({_cfg.CommunityIconXRatio}, {_cfg.CommunityIconYRatio}).");
-        _adb.TapRatio(_cfg.CommunityIconXRatio, _cfg.CommunityIconYRatio);
-        await Task.Delay(2000, ct);
+        // Bước 1: tap icon community từ màn base
+        var screen = ScreenCapture.CaptureWindow(_cfg.WindowTitle);
+        if (screen == null) return false;
 
+        screen.Dispose();
+        Log($"Tapping community icon at ratio ({_cfg.CommunityIconXRatio}, {_cfg.CommunityIconYRatio}).");
+        _adb.TapRatio(_cfg.CommunityIconXRatio, _cfg.CommunityIconYRatio);
+        await Task.Delay(1500, ct);
+
+        // Chờ community screen mở
+        await Task.Delay(500, ct);
+
+        // Bước 2: swipe đến Favorites
         double[] swipeStarts = { 0.85, 0.75 };
-        double[] swipeEnds   = { 0.35, 0.30 };
+        double[] swipeEnds = { 0.35, 0.30 };
         for (int i = 0; i < swipeStarts.Length; i++)
         {
             Log($"Swipe #{i + 1} to Favorites...");
             _adb.SwipeRatio(swipeStarts[i], _cfg.CommunitySwipeYRatio,
-                            swipeEnds[i],   _cfg.CommunitySwipeYRatio, 500);
+                            swipeEnds[i], _cfg.CommunitySwipeYRatio, 500);
             await Task.Delay(600, ct);
         }
 
-        using var cardTpl    = ImageMatcher.LoadTemplate("favorites_card.png");
+        // Bước 3: tìm và tap OPEN của Favorites
+        using var cardTpl = ImageMatcher.LoadTemplate("favorites_card.png");
         using var openBtnTpl = ImageMatcher.LoadTemplate("open_btn.png");
 
         if (cardTpl == null || openBtnTpl == null)
         {
-            Log("Missing templates — tapping hardcoded Favorites OPEN.");
+            Log("Missing favorites_card.png or open_btn.png — tapping hardcoded Favorites OPEN.");
             _adb.TapRatio(_cfg.FavoritesOpenXRatio, _cfg.FavoritesOpenYRatio);
         }
         else
         {
             var s = ScreenCapture.CaptureWindow(_cfg.WindowTitle);
             if (s == null) return false;
-
             var (cardFound, cardPt, cardConf) = ImageMatcher.FindTemplate(s, cardTpl, 0.60);
             SaveDebugScreen(s, "01_after_swipe.png");
             Log($"Favorites card: conf={cardConf:F2} found={cardFound}");
@@ -532,14 +359,16 @@ public class BattleManager
             }
         }
 
+        // Bước 4: chờ Favorite Players load → tap attack
         Log("Waiting 4s for player list...");
         await Task.Delay(4000, ct);
         await TapFirstAttackButtonAsync(ct);
 
+        // Bước 5: Prepare for Battle → tap ATTACK!
         Log("Waiting 2s for Prepare screen...");
         await Task.Delay(2000, ct);
         Log("Tapping ATTACK! button.");
-        _adb.TapRatio(_cfg.AttackButtonXRatio, _cfg.AttackButtonYRatio);
+        _adb.TapRatio(0.79, 0.82);
         return true;
     }
 
@@ -557,18 +386,61 @@ public class BattleManager
         await Task.Delay(1000, ct);
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    // Lock toàn bộ bitmap thành byte array BGRA — nhanh hơn GetPixel hàng trăm lần.
-    private static byte[] LockPixels(Bitmap bmp, out int stride)
+    private bool HasEnemyHpBar(Bitmap screen)
     {
-        var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
-        var data = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-        stride = data.Stride;
-        byte[] buf = new byte[bmp.Height * stride];
-        Marshal.Copy(data.Scan0, buf, 0, buf.Length);
-        bmp.UnlockBits(data);
-        return buf;
+        // Thanh HP đỏ = địch (quân đỏ + cổng/barricade)
+        int x1 = (int)(screen.Width * 0.15), x2 = (int)(screen.Width * 0.85);
+        int y1 = (int)(screen.Height * 0.10), y2 = (int)(screen.Height * 0.55);
+
+        for (int y = y1; y < y2; y += 3)
+        {
+            int streak = 0;
+            for (int x = x1; x < x2; x++)
+            {
+                var c = screen.GetPixel(x, y);
+                if (c.R > 170 && c.G < 90 && c.B < 90)
+                    streak++;
+                else
+                    streak = 0;
+                if (streak >= 8) return true;
+            }
+        }
+        return false;
+    }
+
+    private bool IsHpLow(Bitmap screen)
+    {
+        // Scan toàn bộ y=10%-70% để tìm thanh HP (theo sau hero di chuyển)
+        // HP bar đặc trưng: G cao, G >> R, G >> B (xanh lá thuần)
+        double[] xSamples = { 0.27, 0.31, 0.35, 0.39, 0.43, 0.47 };
+        int yStart = (int)(screen.Height * 0.18);
+        int yEnd = (int)(screen.Height * 0.55); // bỏ bottom 45% tránh nhầm mana bar
+
+        int bestPy = -1;
+        int bestGreen = 0;
+
+        for (int py = yStart; py <= yEnd; py += 4)
+        {
+            int green = 0;
+            foreach (var xr in xSamples)
+            {
+                int px = (int)(screen.Width * xr);
+                if (px >= screen.Width || py >= screen.Height) continue;
+                var c = screen.GetPixel(px, py);
+                if (c.G > 70 && c.G > c.R + 25 && c.G > c.B + 25) green++;
+            }
+            if (green > bestGreen) { bestGreen = green; bestPy = py; }
+        }
+
+        if (bestGreen == 0)
+        {
+            Log("HP bar not found → assuming OK");
+            return false;
+        }
+
+        bool hpOk = bestGreen >= 3;
+        Log($"HP bar at y={bestPy}({bestPy * 1.0 / screen.Height:F2}) green={bestGreen}/6 → hpOk={hpOk}");
+        return !hpOk;
     }
 
     private void Log(string msg) => _log?.Invoke($"[Battle] {msg}");

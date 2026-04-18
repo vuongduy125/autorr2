@@ -30,6 +30,7 @@ bld/
 *.lib
 *.sbr
 *.scc
+*.sourcelink.json
 
 # NuGet
 **/[Pp]ackages/*
