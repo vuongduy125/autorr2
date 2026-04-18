@@ -39,8 +39,8 @@ public class BotConfig
     public int    HeroMoveDurationMs { get; set; } = 800;
 
     // Tap target để hero pathfind đến — upper-right của màn hình
-    public double HeroTargetXRatio { get; set; } = 0.82;
-    public double HeroTargetYRatio { get; set; } = 0.18;
+    public double HeroTargetXRatio { get; set; } = 0.61;
+    public double HeroTargetYRatio { get; set; } = 0.36;
 
     // HP bar detection
     public double HpBarYRatio        { get; set; } = 0.30;  // y của thanh HP (≈280px/900)
@@ -67,6 +67,10 @@ public class BotConfig
     public double CommunitySwipeStartXRatio { get; set; } = 0.90;
     public double CommunitySwipeEndXRatio   { get; set; } = 0.10;
     public double CommunitySwipeYRatio      { get; set; } = 0.500; // 450/900
+
+    // ── Attack button (Prepare for Battle screen) ─────────────────────────────
+    public double AttackButtonXRatio { get; set; } = 0.79;
+    public double AttackButtonYRatio { get; set; } = 0.82;
 
     // ── Loop intervals ────────────────────────────────────────────────────────
     public int BaseLoopIntervalMs   { get; set; } = 5000;
