@@ -15,7 +15,7 @@ public class BattleManager
     private const string TplSpellReady    = "spell_ready.png";
     private const string TplVictory       = "victory.png";
     private const string TplDefeat        = "defeat.png";
-    private const string TplFavoritesCard = "favorites_card.png";
+    private const string TplFavoritesCard = "favorites_tab.png";
     private const string TplOpenBtn       = "open_btn.png";
     private const string TplBaseCoin             = "base_coin_gold.png";
     private const string TplBaseSword            = "base_sword_icon.png";
@@ -78,6 +78,7 @@ public class BattleManager
                 using var screen = ScreenCapture.CaptureWindow(_cfg.WindowTitle);
                 if (screen == null) { await Task.Delay(1000, ct); continue; }
 
+                Log($"Capture: {ScreenCapture.LastCaptureInfo} → bitmap {screen.Width}×{screen.Height}");
                 var state = DetectScreen(screen);
                 Log($"Screen: {state}");
                 await ActAsync(state, screen, ct);
@@ -90,21 +91,34 @@ public class BattleManager
 
     // ── Detect screen ─────────────────────────────────────────────────────────
 
+    private int _debugFrameCount = 0;
+    private ScreenState _lastState = ScreenState.Unknown;
     private ScreenState DetectScreen(Bitmap bmp)
     {
-        if (IsVictoryOrDefeat(bmp))  return ScreenState.BattleResult;
-        if (IsInBattle(bmp))         return ScreenState.InBattle;
-        if (IsPrepareScreen(bmp))    return ScreenState.PrepareScreen;
-        if (IsPlayerListScreen(bmp)) return ScreenState.PlayerListScreen;
-        if (IsFavoritesScreen(bmp))  return ScreenState.FavoritesScreen;
-        if (IsCommunityScreen(bmp))  return ScreenState.CommunityScreen;
-        if (IsHeroDead(bmp))             return ScreenState.HeroDead;
-        if (IsNotEnoughFood(bmp))        return ScreenState.NotEnoughFood;
-        if (IsFortuneTapToContinue(bmp)) return ScreenState.FortuneTapToContinue;
-        if (IsFortuneItemPopup(bmp))     return ScreenState.FortuneItemPopup;
-        if (IsChambersOfFortune(bmp))    return ScreenState.ChambersOfFortune;
-        if (IsAtBase(bmp))               return ScreenState.AtBase;
-        return ScreenState.Unknown;
+        if (++_debugFrameCount <= 3)
+            SaveDebugScreen(bmp, $"debug_frame_{_debugFrameCount}.png");
+
+        if (IsVictoryOrDefeat(bmp))  return Detected(bmp, ScreenState.BattleResult);
+        if (IsInBattle(bmp))         return Detected(bmp, ScreenState.InBattle);
+        if (IsPrepareScreen(bmp))    return Detected(bmp, ScreenState.PrepareScreen);
+        if (IsPlayerListScreen(bmp)) return Detected(bmp, ScreenState.PlayerListScreen);
+        if (IsFavoritesScreen(bmp))  return Detected(bmp, ScreenState.FavoritesScreen);
+        if (IsCommunityScreen(bmp))  return Detected(bmp, ScreenState.CommunityScreen);
+        if (IsHeroDead(bmp))             return Detected(bmp, ScreenState.HeroDead);
+        if (IsNotEnoughFood(bmp))        return Detected(bmp, ScreenState.NotEnoughFood);
+        if (IsFortuneTapToContinue(bmp)) return Detected(bmp, ScreenState.FortuneTapToContinue);
+        if (IsFortuneItemPopup(bmp))     return Detected(bmp, ScreenState.FortuneItemPopup);
+        if (IsChambersOfFortune(bmp))    return Detected(bmp, ScreenState.ChambersOfFortune);
+        if (IsAtBase(bmp))               return Detected(bmp, ScreenState.AtBase);
+        return Detected(bmp, ScreenState.Unknown);
+    }
+
+    private ScreenState Detected(Bitmap bmp, ScreenState state)
+    {
+        if (state == ScreenState.Unknown || state != _lastState)
+            SaveDebugScreen(bmp, $"debug_{state}_{DateTime.Now:HHmmss}.png");
+        _lastState = state;
+        return state;
     }
 
     // ── Act per screen ────────────────────────────────────────────────────────
@@ -209,14 +223,19 @@ public class BattleManager
 
         // Mana bar: blue pixels tại y=94%
         int blueCount = 0;
+        var manaDetail = new System.Text.StringBuilder();
         foreach (var xr in new[] { 0.05, 0.10, 0.15, 0.20, 0.25, 0.30 })
         {
             int x = (int)(bmp.Width * xr), y = (int)(bmp.Height * 0.94);
             if (x >= bmp.Width || y >= bmp.Height) continue;
             int i = y * stride + x * 4;
-            byte b = px[i], r = px[i + 2];
-            if (b > 100 && r < 100 && b > r + 60) blueCount++;
+            byte b = px[i], g = px[i + 1], r = px[i + 2];
+            // pure blue: B dominant over cả R và G (loại teal/cyan)
+            bool hit = b > 120 && r < 90 && b > r + 70 && b > g + 40;
+            if (hit) blueCount++;
+            manaDetail.Append($"x{xr:F2}=({r},{g},{b}){(hit ? "✓" : "✗")} ");
         }
+        Log($"IsInBattle mana [{manaDetail}] → {blueCount}/6");
 
         // Nút Pause góc trên-trái
         bool pause = false;
@@ -225,7 +244,9 @@ public class BattleManager
             if (x < bmp.Width && y < bmp.Height)
             {
                 int i = y * stride + x * 4;
-                pause = px[i] > 120 && px[i + 2] < 150 && px[i] > px[i + 1];
+                byte b = px[i], g = px[i + 1], r = px[i + 2];
+                pause = b > 120 && r < 150 && b > g;
+                Log($"IsInBattle pause ({r},{g},{b}) → {pause}");
             }
         }
 
@@ -236,12 +257,16 @@ public class BattleManager
             if (x < bmp.Width && y < bmp.Height)
             {
                 int i = y * stride + x * 4;
-                sword = px[i] > 100 && px[i] > px[i + 2] + 30 && px[i] > px[i + 1] + 20;
+                byte b = px[i], g = px[i + 1], r = px[i + 2];
+                sword = b > 100 && b > r + 30 && b > g + 20;
+                Log($"IsInBattle sword ({r},{g},{b}) → {sword}");
             }
         }
 
-        bool result = blueCount >= 1 || pause || sword;
-        Log($"IsInBattle — mana:{blueCount}/6 pause:{pause} sword:{sword} → {result}");
+        bool result = blueCount >= 2
+            || (blueCount >= 1 && (pause || sword))
+            || (pause && sword);
+        Log($"IsInBattle → mana:{blueCount}/6 pause:{pause} sword:{sword} = {result}");
         return result;
     }
 
@@ -291,9 +316,9 @@ public class BattleManager
 
     private bool IsPlayerListScreen(Bitmap bmp)
     {
-        using var tpl = ImageMatcher.LoadTemplate(TplFavoritePlayersTitle);
+        using var tpl = ImageMatcher.LoadTemplate(TplFavoritePlayersTitle, trimDark: true);
         if (tpl == null) return false;
-        var (found, _, conf) = ImageMatcher.FindTemplate(bmp, tpl, 0.75);
+        var (found, _, conf) = ImageMatcher.FindTemplate(bmp, tpl, 0.65);
         Log($"IsPlayerListScreen: conf={conf:F2} found={found}");
         return found;
     }
@@ -303,7 +328,7 @@ public class BattleManager
         if (!IsCommunityOpen(bmp)) return false;
         using var tpl = ImageMatcher.LoadTemplate(TplFavoritesCard);
         if (tpl == null) return false;
-        var (found, _, conf) = ImageMatcher.FindTemplate(bmp, tpl, 0.78);
+        var (found, _, conf) = ImageMatcher.FindTemplate(bmp, tpl, 0.72);
         Log($"IsFavoritesScreen: conf={conf:F2} found={found}");
         return found;
     }
@@ -402,17 +427,28 @@ public class BattleManager
         Point best;
         if (cardTpl != null)
         {
-            var (cardFound, cardPt, _) = ImageMatcher.FindTemplate(screen, cardTpl, 0.55);
-            best = cardFound
-                ? opens.OrderBy(p => Math.Pow(p.X - cardPt.X, 2) + Math.Pow(p.Y - cardPt.Y, 2)).First()
-                : opens.OrderByDescending(p => p.X).First();
+            var (cf, cardPt, cardConf) = ImageMatcher.FindTemplate(screen, cardTpl, 0.72);
+            Log($"FavoritesTab: found={cf} conf={cardConf:F2} at {cardPt}");
+            if (cf)
+            {
+                // OPEN buttons nằm bên dưới header Favorites
+                var below = opens.Where(p => p.Y > cardPt.Y).ToList();
+                Log($"OPEN below header={below.Count} (total={opens.Count})");
+                best = below.Count > 0
+                    ? below.OrderBy(p => p.Y).First()   // player đầu tiên trong list
+                    : opens.OrderBy(p => p.Y).First();
+            }
+            else
+            {
+                best = opens.OrderBy(p => p.Y).First();
+            }
         }
         else
         {
-            best = opens.OrderByDescending(p => p.X).First();
+            best = opens.OrderBy(p => p.Y).First();
         }
 
-        Log($"Tapping OPEN at {best}.");
+        Log($"Tapping OPEN at {best} (total opens found={opens.Count}).");
         _adb.TapScaled(best.X, best.Y, screen.Width, screen.Height);
     }
 
@@ -506,7 +542,7 @@ public class BattleManager
             if (streak >= 8) candidates.Add(((streakStart + x2) / 2, y, streak));
         }
 
-        if (candidates.Count == 0) { Log("Enemy: not found"); return (false, 0, 0); }
+        if (candidates.Count == 0) { Log($"Enemy: no red streak >=8px in y={y1}-{y2} x={x1}-{x2}"); return (false, 0, 0); }
 
         // Lọc spell effects (dày dọc > 8px)
         var bars = new List<(int midX, int midY, int streak)>();
@@ -528,7 +564,7 @@ public class BattleManager
             if (contig <= 8) bars.Add(c);
         }
 
-        if (bars.Count == 0) { Log($"Enemy: {candidates.Count} candidates all filtered"); return (false, 0, 0); }
+        if (bars.Count == 0) { Log($"Enemy: {candidates.Count} candidates all filtered (vertical red > 8px)"); return (false, 0, 0); }
 
         double cx = w * 0.5, cy = h * 0.5;
         var best = bars.MinBy(c => Math.Pow(c.midX - cx, 2) + Math.Pow(c.midY - cy, 2));
@@ -547,7 +583,7 @@ public class BattleManager
         int x1 = (int)(w * 0.28), x2 = (int)(w * 0.72);
         int y1 = (int)(h * 0.18), y2 = (int)(h * 0.50);
 
-        int best = 0;
+        int best = 0, bestY = -1;
         for (int y = y1; y < y2; y++)
         {
             int streak = 0, rowBase = y * stride;
@@ -556,14 +592,18 @@ public class BattleManager
                 int i = rowBase + x * 4;
                 byte b = px[i], g = px[i + 1], r = px[i + 2];
                 if (g > 65 && g > r + 20 && g > b + 20) streak++;
-                else { if (streak > best) best = streak; streak = 0; }
+                else { if (streak > best) { best = streak; bestY = y; } streak = 0; }
             }
-            if (streak > best) best = streak;
+            if (streak > best) { best = streak; bestY = y; }
         }
 
         // <8 = không thấy bar; 8-50 = HP thấp; >50 = HP ổn
+        bool notFound = best < 8;
         bool low = best >= 8 && best < 50;
-        Log($"HP streak={best}px → low={low}");
+        if (notFound)
+            Log($"HP streak={best}px at y={bestY} → bar NOT FOUND (assume ok, scan y={y1}-{y2} x={x1}-{x2})");
+        else
+            Log($"HP streak={best}px at y={bestY} → low={low}");
         return low;
     }
 

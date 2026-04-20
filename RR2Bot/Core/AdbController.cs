@@ -49,6 +49,7 @@ public class AdbController : IDisposable
             ScreenWidth  = int.Parse(match.Groups[1].Value);
             ScreenHeight = int.Parse(match.Groups[2].Value);
         }
+        System.Diagnostics.Debug.WriteLine($"[ADB] wm size raw='{output}' → {ScreenWidth}×{ScreenHeight}");
     }
 
     // Scale tọa độ từ không gian capture window sang Android screen
@@ -62,7 +63,10 @@ public class AdbController : IDisposable
     // ── Lệnh cơ bản ──────────────────────────────────────────────────────────
 
     public void Tap(int x, int y)
-        => Shell($"input tap {x} {y}");
+    {
+        System.Diagnostics.Debug.WriteLine($"[ADB] Tap ({x},{y}) on {ScreenWidth}×{ScreenHeight}");
+        Shell($"input tap {x} {y}");
+    }
 
     // Tap với tọa độ từ capture bitmap — tự scale sang Android space
     public void TapScaled(int captureX, int captureY, int captureW, int captureH)
