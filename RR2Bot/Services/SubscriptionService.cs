@@ -8,7 +8,7 @@ namespace RR2Bot.Services
 {
     public class SubscriptionService
     {
-        private const string ApiBaseUrl = "https://api.example.com"; // TODO: configure
+        private const string ApiBaseUrl = "https://h2n8n.store"; // TODO: configure
         private static readonly string KeyFilePath =
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "key.txt");
 
@@ -17,6 +17,9 @@ namespace RR2Bot.Services
         {
             PropertyNameCaseInsensitive = true
         };
+
+        private CancellationTokenSource? _heartbeatCts;
+        private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromMinutes(30);
 
         /// <summary>
         /// Returns the license key from key.txt, or null if file doesn't exist / is empty.
@@ -34,15 +37,34 @@ namespace RR2Bot.Services
         }
 
         /// <summary>
+        /// Decodes a base64-encoded payload from the API response and deserializes it into SubscriptionInfo.
+        /// The API returns: { "payload": "base64...", "signature": "..." }
+        /// The payload decodes to JSON like: {"IsActive":true,"MaxInstance":3,"MainboardId":"111","ExpiresAt":1777309151}
+        /// </summary>
+        private SubscriptionInfo DecodeSubscriptionResponse(string responseJson)
+        {
+            var envelope = JsonSerializer.Deserialize<SubscriptionResponse>(responseJson, _jsonOptions)
+                           ?? throw new Exception("Invalid subscription response envelope.");
+
+            if (string.IsNullOrEmpty(envelope.Payload))
+                throw new Exception("Subscription response payload is empty.");
+
+            var payloadBytes = Convert.FromBase64String(envelope.Payload);
+            var payloadJson = Encoding.UTF8.GetString(payloadBytes);
+
+            return JsonSerializer.Deserialize<SubscriptionInfo>(payloadJson, _jsonOptions)
+                   ?? throw new Exception("Failed to deserialize subscription payload.");
+        }
+
+        /// <summary>
         /// GET api/v1/subcription/{key}
         /// </summary>
-        public async Task<SubscriptionInfo> GetSubscriptionAsync(string key)
+        public async Task<SubscriptionInfo> GetSubscriptionAsync(string key, string mainboardId)
         {
-            var response = await _httpClient.GetAsync($"{ApiBaseUrl}/api/v1/subcription/{key}");
+            var response = await _httpClient.GetAsync($"{ApiBaseUrl}/api/v1/subcription/{key}?mainboard_id={mainboardId}");
             response.EnsureSuccessStatusCode();
             var json = await response.Content.ReadAsStringAsync();
-            return JsonSerializer.Deserialize<SubscriptionInfo>(json, _jsonOptions)
-                   ?? throw new Exception("Invalid subscription response.");
+            return DecodeSubscriptionResponse(json);
         }
 
         /// <summary>
@@ -50,7 +72,7 @@ namespace RR2Bot.Services
         /// </summary>
         public async Task<SubscriptionInfo> RegisterSubscriptionAsync(string key, string mainboardId)
         {
-            var body = new { MainboardId = mainboardId };
+            var body = new { mainboard_id = mainboardId };
             var content = new StringContent(
                 JsonSerializer.Serialize(body),
                 Encoding.UTF8,
@@ -59,8 +81,7 @@ namespace RR2Bot.Services
             var response = await _httpClient.PostAsync($"{ApiBaseUrl}/api/v1/subcription/{key}", content);
             response.EnsureSuccessStatusCode();
             var json = await response.Content.ReadAsStringAsync();
-            return JsonSerializer.Deserialize<SubscriptionInfo>(json, _jsonOptions)
-                   ?? throw new Exception("Invalid subscription response.");
+            return DecodeSubscriptionResponse(json);
         }
 
         /// <summary>
@@ -115,7 +136,7 @@ namespace RR2Bot.Services
                 }
                 else
                 {
-                    info = await GetSubscriptionAsync(key);
+                    info = await GetSubscriptionAsync(key, localMainboardId);
                 }
 
                 if (!info.IsActive)
@@ -140,6 +161,78 @@ namespace RR2Bot.Services
             {
                 return (false, $"License validation error:\n{ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Starts a background heartbeat that checks the subscription every 30 minutes.
+        /// If the subscription becomes inactive, shows a message and exits the application.
+        /// </summary>
+        public void StartHeartbeat(string key)
+        {
+            StopHeartbeat();
+            _heartbeatCts = new CancellationTokenSource();
+            var ct = _heartbeatCts.Token;
+
+            _ = Task.Run(async () =>
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(HeartbeatInterval, ct);
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        break;
+                    }
+
+                    try
+                    {
+                        var localMainboardId = GetLocalMainboardId();
+                        var info = await GetSubscriptionAsync(key, localMainboardId);
+
+                        if (!info.IsActive)
+                        {
+                            // Must show message on UI thread, then exit
+                            if (Application.OpenForms.Count > 0)
+                            {
+                                Application.OpenForms[0]!.Invoke(() =>
+                                {
+                                    MessageBox.Show(
+                                        "Your subscription is no longer active. The application will now close.",
+                                        "Subscription Expired",
+                                        MessageBoxButtons.OK,
+                                        MessageBoxIcon.Warning);
+                                    Application.Exit();
+                                });
+                            }
+                            else
+                            {
+                                Application.Exit();
+                            }
+                            break;
+                        }
+
+                        // Update MaxInstance in case it changed
+                        GlobalState.MaxInstance = info.MaxInstance;
+                    }
+                    catch
+                    {
+                        // Silently ignore heartbeat errors (network issues, etc.)
+                        // The app continues running; next heartbeat will retry.
+                    }
+                }
+            }, ct);
+        }
+
+        /// <summary>
+        /// Stops the background heartbeat.
+        /// </summary>
+        public void StopHeartbeat()
+        {
+            _heartbeatCts?.Cancel();
+            _heartbeatCts?.Dispose();
+            _heartbeatCts = null;
         }
     }
 }

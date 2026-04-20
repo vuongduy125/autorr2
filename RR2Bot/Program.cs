@@ -50,4 +50,11 @@ if (!validated)
     return;
 }
 
+// Start heartbeat to check subscription every 30 minutes
+var activeKey = subscriptionService.GetStoredKey()!;
+subscriptionService.StartHeartbeat(activeKey);
+
 Application.Run(new MainForm());
+
+// Stop heartbeat when application exits
+subscriptionService.StopHeartbeat();

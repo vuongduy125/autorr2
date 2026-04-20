@@ -5,5 +5,6 @@ namespace RR2Bot.Models
         public bool IsActive { get; set; }
         public int MaxInstance { get; set; }
         public string MainboardId { get; set; } = string.Empty;
+        public long ExpiresAt { get; set; }
     }
 }
