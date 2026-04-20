@@ -109,17 +109,18 @@ public class BattleManager
                         bool inGrace = (DateTime.Now - _battleStartAt).TotalSeconds < 5;
                         var (enemyFound, ex, ey) = inGrace ? (false, 0.0, 0.0) : FindEnemyHpBar(screen);
 
+                        // Summon luôn mỗi loop — game tự bỏ qua khi cooldown
+                        SummonTroops();
+
                         if (hpLow)
                         {
                             Log("HP low! Retreating.");
-                            SummonTroops();
                             UseReadySpells(screen);
                             _adb.TapRatio(0.39, 0.64);
                         }
                         else if (enemyFound)
                         {
                             Log($"Enemy at ({ex:F2},{ey:F2}) — moving in, spamming spells.");
-                            SummonTroops();
                             MoveToward(ex, ey);
                             UseReadySpells(screen);
                         }
@@ -365,7 +366,7 @@ public class BattleManager
             dbgSb.Append($"({c.midX},{c.midY},s{c.streak},v{contig}) ");
             if (contig <= 8) realBars.Add(c);
         }
-        if (candidates.Count > 0) Log($"Candidates: {dbgSb}");
+        // if (candidates.Count > 0) Log($"Candidates: {dbgSb}"); // debug only
 
         if (realBars.Count == 0)
         {
@@ -380,7 +381,7 @@ public class BattleManager
         double ry = Math.Min((best.midY + 50.0) / h, 0.85);
         Log($"Enemy HP bar: found=True streak={best.streak} bars={realBars.Count} at ({rx:F2},{ry:F2})");
 
-        SaveEnemyDebug(screen, [.. realBars.Select(c => (c.midX, c.midY))], best.midX, best.midY);
+        // SaveEnemyDebug(screen, [.. realBars.Select(c => (c.midX, c.midY))], best.midX, best.midY); // debug only
         return (true, rx, ry);
     }
 
@@ -449,15 +450,19 @@ public class BattleManager
             {
                 int i = rowBase + x * 4;
                 byte b = pixels[i], g = pixels[i + 1], r = pixels[i + 2];
-                if (g > 140 && r < 80 && b < 80) streak++;
+                // HP bar: xanh lá rõ hơn R và B — phân biệt được với cỏ (cỏ có B cao hơn)
+                if (g > 65 && g > r + 20 && g > b + 20) streak++;
                 else { if (streak > bestStreak) bestStreak = streak; streak = 0; }
             }
             if (streak > bestStreak) bestStreak = streak;
         }
 
-        // Full bar ≈ 140px; <30px ≈ dưới 20% HP → retreat
-        Log($"Hero HP green streak={bestStreak}px → hpLow={bestStreak > 0 && bestStreak < 30}");
-        return bestStreak > 0 && bestStreak < 30;
+        // bestStreak < 8 → không tìm thấy bar → giả sử OK
+        // 8–50px → bar ngắn = HP thấp
+        // >50px → bar dài = HP ổn
+        bool hpLow = bestStreak >= 8 && bestStreak < 50;
+        Log($"Hero HP green streak={bestStreak}px → hpLow={hpLow}");
+        return hpLow;
     }
 
     // ── Battle entry ──────────────────────────────────────────────────────────

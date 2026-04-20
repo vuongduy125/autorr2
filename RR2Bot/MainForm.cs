@@ -25,7 +25,7 @@ public partial class MainForm : Form
         _statusTimer.Tick += StatusTimer_Tick;
         _statusTimer.Start();
 
-        _logFlushTimer = new System.Windows.Forms.Timer { Interval = 300 };
+        _logFlushTimer = new System.Windows.Forms.Timer { Interval = 700 };
         _logFlushTimer.Tick += LogFlushTimer_Tick;
         _logFlushTimer.Start();
     }
