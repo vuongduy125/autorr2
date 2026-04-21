@@ -12,30 +12,50 @@ public class BattleManager
     private readonly BotConfig _cfg;
     private readonly Action<string>? _log;
 
-    private const string TplSpellReady    = "spell_ready.png";
-    private const string TplVictory       = "victory.png";
-    private const string TplDefeat        = "defeat.png";
-    private const string TplFavoritesCard = "favorites_tab.png";
-    private const string TplOpenBtn       = "open_btn.png";
-    private const string TplBaseCoin             = "base_coin_gold.png";
-    private const string TplBaseSword            = "base_sword_icon.png";
-    private const string TplCommunityTitle       = "community_title.png";
-    private const string TplFavoritePlayersTitle = "favorite_players_title.png";
-    private const string TplPrepareBattle        = "prepare_battle_title.png";
-    private const string TplPrepareAttackBtn     = "prepare_battle_attack.png";
-    private const string TplNotEnoughFood        = "not_enough_food.png";
-    private const string TplNotEnoughFoodCollect = "not_enough_food_collect.png";
-    private const string TplChamberFortune       = "chamber_fortune.png";
-    private const string TplFortuneChest         = "fortune_chest.png";
-    private const string TplFortuneGetIt         = "fortune_get_it.png";
-    private const string TplFortuneGiveUp        = "fortune_give_up.png";
-    private const string TplFortuneTapContinue   = "fortune_tap_to_continue.png";
+    private const string TplSpellReady    = @"battle\spell_ready.png";
+    private const string TplVictory       = @"result\victory.png";
+    private const string TplDefeat        = @"result\defeat.png";
+    private const string TplFavoritesCard = @"community\favorites_tab.png";
+    private const string TplOpenBtn       = @"community\open_btn.png";
+    private const string TplBaseCoin             = @"base\base_coin_food.png";
+    private const string TplBaseSword            = @"base\base_sword_icon.png";
+    private const string TplCommunityTitle       = @"community\community_title.png";
+    private const string TplFavoritePlayersTitle = @"community\favorite_players_title.png";
+    private const string TplPrepareBattle        = @"prepare\prepare_battle_title.png";
+    private const string TplPrepareAttackBtn     = @"prepare\prepare_battle_attack.png";
+    private const string TplNotEnoughFood        = @"food\not_enough_food.png";
+    private const string TplNotEnoughFoodCollect = @"food\not_enough_food_collect.png";
+    private const string TplChamberFortune       = @"fortune\chamber_fortune.png";
+    private const string TplFortuneChest         = @"fortune\fortune_chest.png";
+    private const string TplFortuneGetIt         = @"fortune\fortune_get_it.png";
+    private const string TplFortuneGiveUp        = @"fortune\fortune_give_up.png";
+    private const string TplFortuneTapContinue   = @"fortune\fortune_tap_to_continue.png";
+    private const string TplContinueBtn          = @"result\continue_btn.png";
+    private const string TplAttackBtn            = @"battle\attack_btn.png";
+    private const string TplAttackBtnDisable     = @"battle\attack_btn_disable.png";
+    private const string TplLose3Crown           = @"result\lose_3_crown.png";
+
+    public bool DebugDetect { get; set; }
 
     public BattleManager(AdbController adb, BotConfig cfg, Action<string>? log = null)
     {
         _adb = adb;
         _cfg = cfg;
         _log = log;
+    }
+
+    // Helper: load + match + log conf nếu DebugDetect bật
+    private (bool found, Point pt, double conf) Match(Bitmap bmp, string name, double threshold = 0.75, bool trimDark = false)
+    {
+        using var tpl = ImageMatcher.LoadTemplate(name, trimDark);
+        if (tpl == null)
+        {
+            if (DebugDetect) Log($"[D] {name}: template missing");
+            return (false, Point.Empty, 0);
+        }
+        var r = ImageMatcher.FindTemplate(bmp, tpl, threshold);
+        if (DebugDetect) Log($"[D] {name}: conf={r.Confidence:F3} thr={threshold:F2} → {(r.Found ? "FOUND" : "miss")}");
+        return r;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -109,8 +129,19 @@ public class BattleManager
 
     // ── Detect screen ─────────────────────────────────────────────────────────
 
+    private string _lastActivity = "";
+
     private ScreenState DetectScreen(Bitmap bmp)
     {
+        if (DebugDetect)
+        {
+            var act = _adb.GetCurrentActivity();
+            if (act != _lastActivity)
+            {
+                _lastActivity = act;
+                Log($"[D] Activity: {act}");
+            }
+        }
         if (IsVictoryOrDefeat(bmp))      return ScreenState.BattleResult;
         if (IsInBattle(bmp))             return ScreenState.InBattle;
         if (IsPrepareScreen(bmp))        return ScreenState.PrepareScreen;
@@ -138,7 +169,7 @@ public class BattleManager
 
             case ScreenState.BattleResult:
                 Log("Battle result → tapping CONTINUE.");
-                TapTemplate(screen, "continue_btn.png");
+                TapTemplate(screen, TplContinueBtn);
                 await Task.Delay(2000, ct);
                 break;
 
@@ -218,52 +249,10 @@ public class BattleManager
     // ── Screen detectors ──────────────────────────────────────────────────────
 
     private bool IsInBattle(Bitmap bmp)
-    {
-        var px = LockPixels(bmp, out int stride);
-
-        // Mana bar: blue pixels tại y=94%
-        int blueCount = 0;
-        foreach (var xr in new[] { 0.05, 0.10, 0.15, 0.20, 0.25, 0.30 })
-        {
-            int x = (int)(bmp.Width * xr), y = (int)(bmp.Height * 0.94);
-            if (x >= bmp.Width || y >= bmp.Height) continue;
-            int i = y * stride + x * 4;
-            byte b = px[i], g = px[i + 1], r = px[i + 2];
-            if (b > 120 && r < 90 && b > r + 70 && b > g + 40) blueCount++;
-        }
-
-        // Nút Pause góc trên-trái
-        bool pause = false;
-        {
-            int x = (int)(bmp.Width * 0.043), y = (int)(bmp.Height * 0.267);
-            if (x < bmp.Width && y < bmp.Height)
-            {
-                int i = y * stride + x * 4;
-                byte b = px[i], g = px[i + 1], r = px[i + 2];
-                pause = b > 120 && r < 150 && b > g;
-            }
-        }
-
-        // Sword icon (troop button) bottom-left
-        bool sword = false;
-        {
-            int x = (int)(bmp.Width * 0.069), y = (int)(bmp.Height * 0.828);
-            if (x < bmp.Width && y < bmp.Height)
-            {
-                int i = y * stride + x * 4;
-                byte b = px[i], g = px[i + 1], r = px[i + 2];
-                sword = b > 100 && b > r + 30 && b > g + 20;
-            }
-        }
-
-        return blueCount >= 2
-            || (blueCount >= 1 && (pause || sword))
-            || (pause && sword);
-    }
+        => Match(bmp, @"battle\pause_btn.png", 0.75).found;
 
     private bool IsVictoryOrDefeat(Bitmap bmp)
     {
-        // Nền đỏ bên phải = victory screen (R>180, G<60, B<60)
         var px = LockPixels(bmp, out int stride);
         int redCount = 0;
         foreach (var (xr, yr) in new[] { (0.65, 0.20), (0.75, 0.35), (0.80, 0.50), (0.70, 0.60), (0.60, 0.30) })
@@ -274,13 +263,12 @@ public class BattleManager
             byte b = px[i], g = px[i + 1], r = px[i + 2];
             if (r > 180 && g < 60 && b < 60) redCount++;
         }
+        if (DebugDetect) Log($"[D] VictoryOrDefeat red={redCount}/5");
         if (redCount >= 3) return true;
 
-        foreach (var name in new[] { TplVictory, TplDefeat, "lose_3_crown.png" })
+        foreach (var name in new[] { TplVictory, TplDefeat, TplLose3Crown })
         {
-            using var tpl = ImageMatcher.LoadTemplate(name);
-            if (tpl == null) continue;
-            var (found, pt, _) = ImageMatcher.FindTemplate(bmp, tpl, 0.75);
+            var (found, pt, _) = Match(bmp, name);
             if (!found) continue;
             _adb.TapScaled(pt.X, pt.Y, bmp.Width, bmp.Height);
             return true;
@@ -290,60 +278,26 @@ public class BattleManager
 
     private bool IsPrepareScreen(Bitmap bmp)
     {
-        using var tpl = ImageMatcher.LoadTemplate(TplPrepareAttackBtn);
-        if (tpl == null)
-        {
-            using var tpl2 = ImageMatcher.LoadTemplate(TplPrepareBattle);
-            if (tpl2 == null) return false;
-            var (f2, _, _) = ImageMatcher.FindTemplate(bmp, tpl2, 0.75);
-            return f2;
-        }
-        var (found, _, _) = ImageMatcher.FindTemplate(bmp, tpl, 0.75);
-        return found;
+        var (found, _, _) = Match(bmp, TplPrepareAttackBtn);
+        if (found) return true;
+        var (f2, _, _) = Match(bmp, TplPrepareBattle);
+        return f2;
     }
 
     private bool IsPlayerListScreen(Bitmap bmp)
-    {
-        using var tpl = ImageMatcher.LoadTemplate(TplFavoritePlayersTitle, trimDark: true);
-        if (tpl == null) return false;
-        var (found, _, _) = ImageMatcher.FindTemplate(bmp, tpl, 0.65);
-        return found;
-    }
+        => Match(bmp, TplFavoritePlayersTitle, 0.65, trimDark: true).found;
 
     private bool IsFavoritesScreen(Bitmap bmp)
     {
         if (!IsCommunityOpen(bmp)) return false;
-        using var tpl = ImageMatcher.LoadTemplate(TplFavoritesCard);
-        if (tpl == null) return false;
-        var (found, _, _) = ImageMatcher.FindTemplate(bmp, tpl, 0.72);
-        return found;
+        return Match(bmp, TplFavoritesCard, 0.72).found;
     }
 
     private bool IsAtBase(Bitmap bmp)
-    {
-        bool coinFound = false, swordFound = false;
-        using var coinTpl = ImageMatcher.LoadTemplate(TplBaseCoin);
-        if (coinTpl != null)
-        {
-            var (f, _, _) = ImageMatcher.FindTemplate(bmp, coinTpl, 0.70);
-            coinFound = f;
-        }
-        using var swordTpl = ImageMatcher.LoadTemplate(TplBaseSword);
-        if (swordTpl != null)
-        {
-            var (f, _, _) = ImageMatcher.FindTemplate(bmp, swordTpl, 0.70);
-            swordFound = f;
-        }
-        return coinFound && swordFound;
-    }
+        => Match(bmp, TplBaseCoin, 0.73).found;
 
     private bool IsCommunityOpen(Bitmap bmp)
-    {
-        using var tpl = ImageMatcher.LoadTemplate(TplCommunityTitle);
-        if (tpl == null) return false;
-        var (found, _, _) = ImageMatcher.FindTemplate(bmp, tpl, 0.75);
-        return found;
-    }
+        => Match(bmp, TplCommunityTitle).found;
 
     private bool IsCommunityScreen(Bitmap bmp)
         => IsCommunityOpen(bmp);
@@ -352,35 +306,22 @@ public class BattleManager
 
     private void TapPrepareAttack(Bitmap screen)
     {
-        using var tpl = ImageMatcher.LoadTemplate(TplPrepareAttackBtn);
-        if (tpl != null)
-        {
-            var (found, pt, _) = ImageMatcher.FindTemplate(screen, tpl, 0.75);
-            if (found) { _adb.TapScaled(pt.X, pt.Y, screen.Width, screen.Height); return; }
-        }
+        var (found, pt, _) = Match(screen, TplPrepareAttackBtn);
+        if (found) { _adb.TapScaled(pt.X, pt.Y, screen.Width, screen.Height); return; }
         Log("ATTACK! not found → tapping hardcoded.");
         _adb.TapRatio(_cfg.AttackButtonXRatio, _cfg.AttackButtonYRatio);
     }
 
     private void TapFirstAttackButton(Bitmap screen)
     {
-        using var tpl = ImageMatcher.LoadTemplate("attack_btn.png");
-        if (tpl == null) { Log("attack_btn.png missing."); return; }
-
-        var (found, pt, _) = ImageMatcher.FindTemplate(screen, tpl, 0.72);
-
+        var (found, pt, _) = Match(screen, TplAttackBtn, 0.72);
         if (!found)
         {
-            using var disTpl = ImageMatcher.LoadTemplate("attack_btn_disable.png");
-            if (disTpl != null)
-            {
-                var (disFound, _, _) = ImageMatcher.FindTemplate(screen, disTpl, 0.72);
-                if (disFound) { Log("Attack disabled → going back."); _adb.TapRatio(0.877, 0.120); return; }
-            }
+            var (disFound, _, _) = Match(screen, TplAttackBtnDisable, 0.72);
+            if (disFound) { Log("Attack disabled → going back."); _adb.TapRatio(0.877, 0.120); return; }
             Log("Attack button not found — skipping.");
             return;
         }
-
         _adb.TapScaled(pt.X, pt.Y, screen.Width, screen.Height);
     }
 
@@ -594,42 +535,21 @@ public class BattleManager
     // ── Not Enough Food ──────────────────────────────────────────────────────
 
     private bool IsNotEnoughFood(Bitmap bmp)
-    {
-        using var tpl = ImageMatcher.LoadTemplate(TplNotEnoughFood);
-        if (tpl == null) return false;
-        var (found, _, _) = ImageMatcher.FindTemplate(bmp, tpl, 0.75);
-        return found;
-    }
-
-    // ── Chamber of Fortune ───────────────────────────────────────────────────
+        => Match(bmp, TplNotEnoughFoodCollect, 0.60).found
+        || Match(bmp, TplNotEnoughFood, 0.60).found;
 
     private bool IsChambersOfFortune(Bitmap bmp)
-    {
-        using var tpl = ImageMatcher.LoadTemplate(TplChamberFortune);
-        if (tpl == null) return false;
-        var (found, _, _) = ImageMatcher.FindTemplate(bmp, tpl, 0.75);
-        return found;
-    }
+        => Match(bmp, TplChamberFortune).found;
 
     private bool IsFortuneItemPopup(Bitmap bmp)
     {
         foreach (var name in new[] { TplFortuneGetIt, TplFortuneGiveUp })
-        {
-            using var tpl = ImageMatcher.LoadTemplate(name);
-            if (tpl == null) continue;
-            var (found, _, _) = ImageMatcher.FindTemplate(bmp, tpl, 0.75);
-            if (found) return true;
-        }
+            if (Match(bmp, name, 0.72).found) return true;
         return false;
     }
 
     private bool IsFortuneTapToContinue(Bitmap bmp)
-    {
-        using var tpl = ImageMatcher.LoadTemplate(TplFortuneTapContinue);
-        if (tpl == null) return false;
-        var (found, _, _) = ImageMatcher.FindTemplate(bmp, tpl, 0.75);
-        return found;
-    }
+        => Match(bmp, TplFortuneTapContinue).found;
 
     private void TapFirstChest(Bitmap screen)
     {
@@ -645,9 +565,7 @@ public class BattleManager
     {
         foreach (var name in templateNames)
         {
-            using var tpl = ImageMatcher.LoadTemplate(name);
-            if (tpl == null) continue;
-            var (found, pt, _) = ImageMatcher.FindTemplate(screen, tpl, 0.75);
+            var (found, pt, _) = Match(screen, name);
             if (!found) continue;
             _adb.TapScaled(pt.X, pt.Y, screen.Width, screen.Height);
             return;

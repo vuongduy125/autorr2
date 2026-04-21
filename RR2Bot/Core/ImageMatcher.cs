@@ -32,7 +32,8 @@ public static class ImageMatcher
         bool brightMaskOnly = false,
         int brightThreshold = 160)
     {
-        using var srcMat = BitmapToMat(source);
+        using var srcBgr = BitmapToMat(source);
+        using var srcMat = ToGray(srcBgr);
 
         double bestConf = 0;
         Point  bestLoc  = Point.Empty;
@@ -44,10 +45,9 @@ public static class ImageMatcher
             int sh = (int)(template.Height * scale);
             if (sw < 4 || sh < 4 || sw > source.Width || sh > source.Height) continue;
 
-            using var tplScaled = scale == 1.0
-                ? BitmapToMat(template)
-                : ResizeMat(BitmapToMat(template), sw, sh);
-            using var result = new Mat();
+            using var tplBgr    = scale == 1.0 ? BitmapToMat(template) : ResizeMat(BitmapToMat(template), sw, sh);
+            using var tplScaled = ToGray(tplBgr);
+            using var result    = new Mat();
 
             if (brightMaskOnly)
             {
@@ -94,10 +94,15 @@ public static class ImageMatcher
     /// <summary>
     /// Mask giữ lại pixel sáng (text trắng) trong template, bỏ pixel tối (background động).
     /// </summary>
-    private static Mat MakeBrightMask(Mat tpl, int threshold)
+    private static Mat ToGray(Mat bgr)
     {
-        using var gray = new Mat();
-        CvInvoke.CvtColor(tpl, gray, ColorConversion.Bgr2Gray);
+        var gray = new Mat();
+        CvInvoke.CvtColor(bgr, gray, ColorConversion.Bgr2Gray);
+        return gray;
+    }
+
+    private static Mat MakeBrightMask(Mat gray, int threshold)
+    {
         var mask = new Mat();
         CvInvoke.Threshold(gray, mask, threshold, 255, ThresholdType.Binary);
         return mask;
@@ -139,8 +144,10 @@ public static class ImageMatcher
         if (template.Width > source.Width || template.Height > source.Height)
             return new List<Point>();
 
-        using var srcMat = BitmapToMat(source);
-        using var tplMat = BitmapToMat(template);
+        using var srcBgr = BitmapToMat(source);
+        using var tplBgr = BitmapToMat(template);
+        using var srcMat = ToGray(srcBgr);
+        using var tplMat = ToGray(tplBgr);
         using var result = new Mat();
 
         CvInvoke.MatchTemplate(srcMat, tplMat, result, TemplateMatchingType.CcoeffNormed);

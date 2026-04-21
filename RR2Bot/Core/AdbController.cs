@@ -41,8 +41,11 @@ public class AdbController : IDisposable
 
     public void ReadScreenSize()
     {
+        // Force resolution trước khi đọc
+        Shell("wm size 1600x900");
+        System.Threading.Thread.Sleep(300);
+
         var output = ShellOutput("wm size");
-        // "Physical size: 1600x900"
         var match = System.Text.RegularExpressions.Regex.Match(output, @"(\d+)x(\d+)");
         if (match.Success)
         {
@@ -119,6 +122,19 @@ public class AdbController : IDisposable
             return receiver.ToString();
         }
         catch { return ""; }
+    }
+
+    /// <summary>
+    /// Trả về tên Activity hiện tại, ví dụ "com.flaregames.royalrevolt2/.MainActivity"
+    /// Trả về "" nếu không đọc được.
+    /// </summary>
+    public string GetCurrentActivity()
+    {
+        var output = ShellOutput("dumpsys activity activities | grep mResumedActivity");
+        if (string.IsNullOrWhiteSpace(output)) return "";
+        // dạng: mResumedActivity: ActivityRecord{... u0 com.pkg/.ActivityName t123}
+        var match = System.Text.RegularExpressions.Regex.Match(output, @"u\d+\s+([\w./]+)");
+        return match.Success ? match.Groups[1].Value : output.Trim();
     }
 
     public void Dispose() => _connected = false;

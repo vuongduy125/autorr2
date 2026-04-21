@@ -9,6 +9,7 @@ public partial class MainForm : Form
 {
     private readonly BotConfig _cfg = new();
     private AdbController? _adb;
+    private BattleManager? _battleMgr;
 
     private CancellationTokenSource? _cts;
     private Task? _botTask;
@@ -17,9 +18,25 @@ public partial class MainForm : Form
     private readonly System.Windows.Forms.Timer _logFlushTimer;
     private readonly ConcurrentQueue<(string msg, Color color)> _logQueue = new();
 
+    private readonly CheckBox _chkDebug;
+
     public MainForm()
     {
         InitializeComponent();
+
+        // Thêm checkbox Debug conf vào form
+        _chkDebug = new CheckBox
+        {
+            Text     = "Debug conf",
+            AutoSize = true,
+            ForeColor = Color.Orange,
+        };
+        _chkDebug.CheckedChanged += (_, _) =>
+        {
+            if (_battleMgr != null) _battleMgr.DebugDetect = _chkDebug.Checked;
+        };
+        grpControl.Controls.Add(_chkDebug);
+        _chkDebug.Location = new Point(btnStop.Right + 16, btnStop.Top + 9);
 
         _statusTimer = new System.Windows.Forms.Timer { Interval = 2000 };
         _statusTimer.Tick += StatusTimer_Tick;
@@ -49,7 +66,9 @@ public partial class MainForm : Form
             AppendLog($"Android screen: {_adb.ScreenWidth}x{_adb.ScreenHeight}");
         }
 
-        var mode = (BotMode)cmbMode.SelectedIndex;
+        var mode = rbBoth.Checked ? BotMode.Both
+                 : rbBaseOnly.Checked ? BotMode.BaseOnly
+                 : BotMode.BattleOnly;
         SetRunning(true);
         AppendLog($"Bot started — mode: {mode}");
 
@@ -90,8 +109,11 @@ public partial class MainForm : Form
 
         if (mode is BotMode.BattleOnly or BotMode.Both)
         {
-            var battleMgr = new BattleManager(adb, _cfg, msg => AppendLog(msg));
-            tasks.Add(Task.Run(async () => await battleMgr.RunAsync(ct), ct));
+            _battleMgr = new BattleManager(adb, _cfg, msg => AppendLog(msg))
+            {
+                DebugDetect = _chkDebug.Checked
+            };
+            tasks.Add(Task.Run(async () => await _battleMgr.RunAsync(ct), ct));
         }
 
         try { await Task.WhenAll(tasks); }
@@ -118,7 +140,9 @@ public partial class MainForm : Form
     {
         btnStart.Enabled = !running;
         btnStop.Enabled  = running;
-        cmbMode.Enabled  = !running;
+        rbBaseOnly.Enabled   = !running;
+        rbBattleOnly.Enabled = !running;
+        rbBoth.Enabled       = !running;
         lblStatus.Text   = running ? "Running..." : "Idle";
         lblStatus.ForeColor = running ? Color.LimeGreen : Color.Gray;
     }

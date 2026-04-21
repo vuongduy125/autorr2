@@ -8,8 +8,9 @@ partial class MainForm
     private GroupBox grpControl = null!;
     private Button btnStart = null!;
     private Button btnStop = null!;
-    private ComboBox cmbMode = null!;
-    private Label lblMode = null!;
+    private RadioButton rbBaseOnly = null!;
+    private RadioButton rbBattleOnly = null!;
+    private RadioButton rbBoth = null!;
     private Label lblStatus = null!;
     private RichTextBox rtbLog = null!;
     private StatusStrip statusStrip = null!;
@@ -26,12 +27,13 @@ partial class MainForm
     {
         components = new System.ComponentModel.Container();
 
-        grpControl  = new GroupBox();
-        btnStart    = new Button();
-        btnStop     = new Button();
-        cmbMode     = new ComboBox();
-        lblMode     = new Label();
-        lblStatus   = new Label();
+        grpControl   = new GroupBox();
+        btnStart     = new Button();
+        btnStop      = new Button();
+        rbBaseOnly   = new RadioButton();
+        rbBattleOnly = new RadioButton();
+        rbBoth       = new RadioButton();
+        lblStatus    = new Label();
         rtbLog      = new RichTextBox();
         statusStrip = new StatusStrip();
         tsslAdb     = new ToolStripStatusLabel();
@@ -53,23 +55,26 @@ partial class MainForm
         grpControl.Size      = new Size(760, 80);
         grpControl.Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
-        // Mode label + combo
-        lblMode.Text     = "Mode:";
-        lblMode.Location = new Point(12, 28);
-        lblMode.AutoSize = true;
+        // Mode radio buttons
+        rbBaseOnly.Text      = "Base Only";
+        rbBaseOnly.Location  = new Point(12, 28);
+        rbBaseOnly.AutoSize  = true;
+        rbBaseOnly.ForeColor = Color.WhiteSmoke;
 
-        cmbMode.Location      = new Point(55, 24);
-        cmbMode.Size          = new Size(140, 24);
-        cmbMode.DropDownStyle = ComboBoxStyle.DropDownList;
-        cmbMode.Items.AddRange(new object[] { "Base Only", "Battle Only", "Both" });
-        cmbMode.SelectedIndex = 0;
-        cmbMode.FlatStyle     = FlatStyle.Flat;
-        cmbMode.BackColor     = Color.FromArgb(50, 50, 50);
-        cmbMode.ForeColor     = Color.WhiteSmoke;
+        rbBattleOnly.Text      = "Battle Only";
+        rbBattleOnly.Location  = new Point(100, 28);
+        rbBattleOnly.AutoSize  = true;
+        rbBattleOnly.ForeColor = Color.WhiteSmoke;
+        rbBattleOnly.Checked   = true;
+
+        rbBoth.Text      = "Both";
+        rbBoth.Location  = new Point(195, 28);
+        rbBoth.AutoSize  = true;
+        rbBoth.ForeColor = Color.WhiteSmoke;
 
         // Start button
         btnStart.Text      = "▶  Start";
-        btnStart.Location  = new Point(220, 20);
+        btnStart.Location  = new Point(250, 20);
         btnStart.Size      = new Size(110, 36);
         btnStart.BackColor = Color.FromArgb(34, 139, 34);
         btnStart.ForeColor = Color.White;
@@ -80,7 +85,7 @@ partial class MainForm
 
         // Stop button
         btnStop.Text      = "■  Stop";
-        btnStop.Location  = new Point(345, 20);
+        btnStop.Location  = new Point(375, 20);
         btnStop.Size      = new Size(110, 36);
         btnStop.BackColor = Color.FromArgb(178, 34, 34);
         btnStop.ForeColor = Color.White;
@@ -92,13 +97,13 @@ partial class MainForm
 
         // Status label
         lblStatus.Text      = "Idle";
-        lblStatus.Location  = new Point(480, 30);
+        lblStatus.Location  = new Point(620, 30);
         lblStatus.AutoSize  = true;
         lblStatus.ForeColor = Color.Gray;
         lblStatus.Font      = new Font("Segoe UI", 9f, FontStyle.Italic);
 
         grpControl.Controls.AddRange(new Control[]
-            { lblMode, cmbMode, btnStart, btnStop, lblStatus });
+            { rbBaseOnly, rbBattleOnly, rbBoth, btnStart, btnStop, lblStatus });
 
         // ── Log RichTextBox ───────────────────────────────────────────────────
         rtbLog.Location    = new Point(12, 104);
