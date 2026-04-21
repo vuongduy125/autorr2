@@ -32,16 +32,20 @@ public partial class MainForm : Form
 
     // ── Button handlers ──────────────────────────────────────────────────────
 
-    private void BtnStart_Click(object? sender, EventArgs e)
+    private async void BtnStart_Click(object? sender, EventArgs e)
     {
+        btnStart.Enabled = false;
+        AppendLog("Connecting ADB...");
+
         _adb = new AdbController();
-        if (!_adb.Connect(_cfg.AdbHost, _cfg.AdbPort, _cfg.AdbExePath))
+        bool connected = await Task.Run(() => _adb.Connect(_cfg.AdbHost, _cfg.AdbPort, _cfg.AdbExePath));
+        if (!connected)
         {
             AppendLog("[Warn] ADB not connected — tap/swipe will be skipped.", Color.Orange);
         }
         else
         {
-            _adb.ReadScreenSize();
+            await Task.Run(() => _adb.ReadScreenSize());
             AppendLog($"Android screen: {_adb.ScreenWidth}x{_adb.ScreenHeight}");
         }
 
@@ -81,13 +85,13 @@ public partial class MainForm : Form
         if (mode is BotMode.BaseOnly or BotMode.Both)
         {
             var baseMgr = new BaseManager(adb, _cfg, msg => AppendLog(msg));
-            tasks.Add(baseMgr.RunAsync(ct));
+            tasks.Add(Task.Run(async () => await baseMgr.RunAsync(ct), ct));
         }
 
         if (mode is BotMode.BattleOnly or BotMode.Both)
         {
             var battleMgr = new BattleManager(adb, _cfg, msg => AppendLog(msg));
-            tasks.Add(battleMgr.RunAsync(ct));
+            tasks.Add(Task.Run(async () => await battleMgr.RunAsync(ct), ct));
         }
 
         try { await Task.WhenAll(tasks); }
@@ -138,15 +142,19 @@ public partial class MainForm : Form
             rtbLog.AppendText(entry.msg + Environment.NewLine);
         }
 
-        // Trim to last 500 lines to avoid memory growth
-        const int maxLines = 500;
-        if (rtbLog.Lines.Length > maxLines)
+        rtbLog.ResumeLayout();
+
+        // Trim log: xóa nửa đầu khi quá dài, tránh assign Lines[] (chậm)
+        if (rtbLog.TextLength > 60_000)
         {
-            var kept = rtbLog.Lines[^maxLines..];
-            rtbLog.Lines = kept;
+            int cut = rtbLog.Text.IndexOf('\n', 20_000);
+            if (cut > 0)
+            {
+                rtbLog.Select(0, cut + 1);
+                rtbLog.SelectedText = "";
+            }
         }
 
-        rtbLog.ResumeLayout();
         rtbLog.ScrollToCaret();
     }
 
