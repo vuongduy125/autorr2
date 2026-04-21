@@ -9,6 +9,7 @@ public partial class MainForm : Form
 {
     private readonly BotConfig _cfg = new();
     private AdbController? _adb;
+    private BattleManager? _battleMgr;
 
     private CancellationTokenSource? _cts;
     private Task? _botTask;
@@ -17,9 +18,25 @@ public partial class MainForm : Form
     private readonly System.Windows.Forms.Timer _logFlushTimer;
     private readonly ConcurrentQueue<(string msg, Color color)> _logQueue = new();
 
+    private readonly CheckBox _chkDebug;
+
     public MainForm()
     {
         InitializeComponent();
+
+        // Thêm checkbox Debug conf vào form
+        _chkDebug = new CheckBox
+        {
+            Text     = "Debug conf",
+            AutoSize = true,
+            ForeColor = Color.Orange,
+        };
+        _chkDebug.CheckedChanged += (_, _) =>
+        {
+            if (_battleMgr != null) _battleMgr.DebugDetect = _chkDebug.Checked;
+        };
+        grpControl.Controls.Add(_chkDebug);
+        _chkDebug.Location = new Point(btnStop.Right + 16, btnStop.Top + 9);
 
         _statusTimer = new System.Windows.Forms.Timer { Interval = 2000 };
         _statusTimer.Tick += StatusTimer_Tick;
@@ -32,20 +49,26 @@ public partial class MainForm : Form
 
     // ── Button handlers ──────────────────────────────────────────────────────
 
-    private void BtnStart_Click(object? sender, EventArgs e)
+    private async void BtnStart_Click(object? sender, EventArgs e)
     {
+        btnStart.Enabled = false;
+        AppendLog("Connecting ADB...");
+
         _adb = new AdbController();
-        if (!_adb.Connect(_cfg.AdbHost, _cfg.AdbPort, _cfg.AdbExePath))
+        bool connected = await Task.Run(() => _adb.Connect(_cfg.AdbHost, _cfg.AdbPort, _cfg.AdbExePath));
+        if (!connected)
         {
             AppendLog("[Warn] ADB not connected — tap/swipe will be skipped.", Color.Orange);
         }
         else
         {
-            _adb.ReadScreenSize();
+            await Task.Run(() => _adb.ReadScreenSize());
             AppendLog($"Android screen: {_adb.ScreenWidth}x{_adb.ScreenHeight}");
         }
 
-        var mode = (BotMode)cmbMode.SelectedIndex;
+        var mode = rbBoth.Checked ? BotMode.Both
+                 : rbBaseOnly.Checked ? BotMode.BaseOnly
+                 : BotMode.BattleOnly;
         SetRunning(true);
         AppendLog($"Bot started — mode: {mode}");
 
@@ -81,13 +104,16 @@ public partial class MainForm : Form
         if (mode is BotMode.BaseOnly or BotMode.Both)
         {
             var baseMgr = new BaseManager(adb, _cfg, msg => AppendLog(msg));
-            tasks.Add(baseMgr.RunAsync(ct));
+            tasks.Add(Task.Run(async () => await baseMgr.RunAsync(ct), ct));
         }
 
         if (mode is BotMode.BattleOnly or BotMode.Both)
         {
-            var battleMgr = new BattleManager(adb, _cfg, msg => AppendLog(msg));
-            tasks.Add(battleMgr.RunAsync(ct));
+            _battleMgr = new BattleManager(adb, _cfg, msg => AppendLog(msg))
+            {
+                DebugDetect = _chkDebug.Checked
+            };
+            tasks.Add(Task.Run(async () => await _battleMgr.RunAsync(ct), ct));
         }
 
         try { await Task.WhenAll(tasks); }
@@ -114,7 +140,9 @@ public partial class MainForm : Form
     {
         btnStart.Enabled = !running;
         btnStop.Enabled  = running;
-        cmbMode.Enabled  = !running;
+        rbBaseOnly.Enabled   = !running;
+        rbBattleOnly.Enabled = !running;
+        rbBoth.Enabled       = !running;
         lblStatus.Text   = running ? "Running..." : "Idle";
         lblStatus.ForeColor = running ? Color.LimeGreen : Color.Gray;
     }
@@ -138,15 +166,19 @@ public partial class MainForm : Form
             rtbLog.AppendText(entry.msg + Environment.NewLine);
         }
 
-        // Trim to last 500 lines to avoid memory growth
-        const int maxLines = 500;
-        if (rtbLog.Lines.Length > maxLines)
+        rtbLog.ResumeLayout();
+
+        // Trim log: xóa nửa đầu khi quá dài, tránh assign Lines[] (chậm)
+        if (rtbLog.TextLength > 60_000)
         {
-            var kept = rtbLog.Lines[^maxLines..];
-            rtbLog.Lines = kept;
+            int cut = rtbLog.Text.IndexOf('\n', 20_000);
+            if (cut > 0)
+            {
+                rtbLog.Select(0, cut + 1);
+                rtbLog.SelectedText = "";
+            }
         }
 
-        rtbLog.ResumeLayout();
         rtbLog.ScrollToCaret();
     }
 

@@ -21,7 +21,7 @@ public class BotConfig
     // ── Spell buttons (ratio) ─────────────────────────────────────────────────
     public (double X, double Y)[] SpellButtonRatios { get; set; } =
     {
-        (0.937, 0.166), // hero spell card top-right
+        //(0.937, 0.166), // hero spell card top-right
         (0.923, 0.844), // chưởng (hero ability) bottom-right
     };
 
