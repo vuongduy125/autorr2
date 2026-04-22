@@ -2,9 +2,8 @@ using System.Buffers;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
-using Emgu.CV;
-using Emgu.CV.CvEnum;
-using Emgu.CV.Structure;
+using OpenCvSharp;
+using Point = System.Drawing.Point;
 
 namespace RR2Bot.Core;
 
@@ -52,27 +51,25 @@ public static class ImageMatcher
             if (brightMaskOnly)
             {
                 using var mask = MakeBrightMask(tplScaled, brightThreshold);
-                CvInvoke.MatchTemplate(srcMat, tplScaled, result, TemplateMatchingType.CcorrNormed, mask);
+                Cv2.MatchTemplate(srcMat, tplScaled, result, TemplateMatchModes.CCorrNormed, mask);
             }
             else if (borderMatchOnly && sw > borderSize * 2 + 2 && sh > borderSize * 2 + 2)
             {
                 int bs = Math.Max(1, (int)(borderSize * scale));
                 using var mask = MakeBorderMask(sw, sh, bs);
-                CvInvoke.MatchTemplate(srcMat, tplScaled, result, TemplateMatchingType.CcorrNormed, mask);
+                Cv2.MatchTemplate(srcMat, tplScaled, result, TemplateMatchModes.CCorrNormed, mask);
             }
             else
             {
-                CvInvoke.MatchTemplate(srcMat, tplScaled, result, TemplateMatchingType.CcoeffNormed);
+                Cv2.MatchTemplate(srcMat, tplScaled, result, TemplateMatchModes.CCoeffNormed);
             }
 
-            double minVal = 0, maxVal = 0;
-            Point minLoc = Point.Empty, maxLoc = Point.Empty;
-            CvInvoke.MinMaxLoc(result, ref minVal, ref maxVal, ref minLoc, ref maxLoc);
+            Cv2.MinMaxLoc(result, out double minVal, out double maxVal, out OpenCvSharp.Point minLocCv, out OpenCvSharp.Point maxLocCv);
 
             if (maxVal > bestConf)
             {
                 bestConf = maxVal;
-                bestLoc  = maxLoc;
+                bestLoc  = new Point(maxLocCv.X, maxLocCv.Y);
                 bestW = sw; bestH = sh;
             }
 
@@ -97,30 +94,30 @@ public static class ImageMatcher
     private static Mat ToGray(Mat bgr)
     {
         var gray = new Mat();
-        CvInvoke.CvtColor(bgr, gray, ColorConversion.Bgr2Gray);
+        Cv2.CvtColor(bgr, gray, ColorConversionCodes.BGR2GRAY);
         return gray;
     }
 
     private static Mat MakeBrightMask(Mat gray, int threshold)
     {
         var mask = new Mat();
-        CvInvoke.Threshold(gray, mask, threshold, 255, ThresholdType.Binary);
+        Cv2.Threshold(gray, mask, threshold, 255, ThresholdTypes.Binary);
         return mask;
     }
 
     private static Mat MakeBorderMask(int w, int h, int borderSize)
     {
-        var mask = new Mat(h, w, DepthType.Cv8U, 1);
-        mask.SetTo(new MCvScalar(255));
+        var mask = new Mat(h, w, MatType.CV_8UC1);
+        mask.SetTo(new Scalar(255));
 
         // Xóa vùng bên trong (chỉ giữ viền)
         int innerX = borderSize, innerY = borderSize;
         int innerW = w - borderSize * 2, innerH = h - borderSize * 2;
         if (innerW > 0 && innerH > 0)
         {
-            var roi = new System.Drawing.Rectangle(innerX, innerY, innerW, innerH);
+            var roi = new OpenCvSharp.Rect(innerX, innerY, innerW, innerH);
             using var inner = new Mat(mask, roi);
-            inner.SetTo(new MCvScalar(0));
+            inner.SetTo(new Scalar(0));
         }
         return mask;
     }
@@ -128,7 +125,7 @@ public static class ImageMatcher
     private static Mat ResizeMat(Mat src, int w, int h)
     {
         var dst = new Mat();
-        CvInvoke.Resize(src, dst, new System.Drawing.Size(w, h));
+        Cv2.Resize(src, dst, new OpenCvSharp.Size(w, h));
         src.Dispose();
         return dst;
     }
@@ -150,11 +147,11 @@ public static class ImageMatcher
         using var tplMat = ToGray(tplBgr);
         using var result = new Mat();
 
-        CvInvoke.MatchTemplate(srcMat, tplMat, result, TemplateMatchingType.CcoeffNormed);
+        Cv2.MatchTemplate(srcMat, tplMat, result, TemplateMatchModes.CCoeffNormed);
 
         int total = result.Rows * result.Cols;
         byte[] raw = new byte[total * sizeof(float)];
-        Marshal.Copy(result.DataPointer, raw, 0, raw.Length);
+        Marshal.Copy(result.Data, raw, 0, raw.Length);
 
         int halfW = template.Width  / 2;
         int halfH = template.Height / 2;
@@ -247,7 +244,7 @@ public static class ImageMatcher
         var bmpData = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
         try
         {
-            var mat       = new Mat(bmp.Height, bmp.Width, DepthType.Cv8U, 3);
+            var mat       = new Mat(bmp.Height, bmp.Width, MatType.CV_8UC3);
             int bmpStride = bmpData.Stride;
             int rowBytes  = bmp.Width * 3;
             int totalBytes = bmp.Height * rowBytes;
@@ -257,7 +254,7 @@ public static class ImageMatcher
             {
                 for (int row = 0; row < bmp.Height; row++)
                     Marshal.Copy(bmpData.Scan0 + row * bmpStride, buffer, row * rowBytes, rowBytes);
-                Marshal.Copy(buffer, 0, mat.DataPointer, totalBytes);
+                Marshal.Copy(buffer, 0, mat.Data, totalBytes);
             }
             finally
             {
