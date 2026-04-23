@@ -36,7 +36,7 @@ public partial class MainForm : Form
             if (_battleMgr != null) _battleMgr.DebugDetect = _chkDebug.Checked;
         };
         grpControl.Controls.Add(_chkDebug);
-        _chkDebug.Location = new Point(btnStop.Right + 16, btnStop.Top + 9);
+        _chkDebug.Location = new Point(12, 55);
 
         _statusTimer = new System.Windows.Forms.Timer { Interval = 2000 };
         _statusTimer.Tick += StatusTimer_Tick;

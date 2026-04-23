@@ -31,11 +31,20 @@ public class BattleManager
     private const string TplFortuneGiveUp        = @"fortune\fortune_give_up.png";
     private const string TplFortuneTapContinue   = @"fortune\fortune_tap_to_continue.png";
     private const string TplContinueBtn          = @"result\continue_btn.png";
-    private const string TplAttackBtn            = @"battle\attack_btn.png";
-    private const string TplAttackBtnDisable     = @"battle\attack_btn_disable.png";
+    private const string TplAttackBtn             = @"battle\attack_btn.png";
+    private const string TplAttackBtnDisable      = @"battle\attack_btn_disable.png";
+    private const string TplPlayerListAttackBtn   = @"community\player_list_attack.png";
     private const string TplLose3Crown           = @"result\lose_3_crown.png";
 
     public bool DebugDetect { get; set; }
+
+    private static readonly string ModelPath =
+        Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Models", "best.onnx");
+
+    private readonly YoloDetector? _yolo =
+        File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Models", "best.onnx"))
+            ? new YoloDetector(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Models", "best.onnx"))
+            : null;
 
     public BattleManager(AdbController adb, BotConfig cfg, Action<string>? log = null)
     {
@@ -92,7 +101,7 @@ public class BattleManager
 
     public async Task RunAsync(CancellationToken ct)
     {
-        Log("BattleManager started.");
+        Log(_yolo != null ? "BattleManager started (YOLO mode)." : "BattleManager started (template mode).");
         var troopLoop = Task.Run(() => TroopSummonLoopAsync(ct), ct);
         while (!ct.IsCancellationRequested)
         {
@@ -101,14 +110,20 @@ public class BattleManager
                 using var screen = ScreenCapture.CaptureWindow(_cfg.WindowTitle);
                 if (screen == null) { await Task.Delay(1000, ct); continue; }
 
-                var state = DetectScreen(screen);
+                // Chạy YOLO 1 lần — dùng cho cả detect lẫn act
+                var detections = _yolo?.Detect(screen, 0.30f) ?? [];
+                if (DebugDetect && detections.Count > 0)
+                    Log($"[D] YOLO: {string.Join(", ", detections.Select(d => $"{d.ClassName}({d.Confidence:F2})"))}");
+
+                var state = DetectScreen(screen, detections);
                 if (state != _lastLoggedState) { Log($"Screen: {state}"); _lastLoggedState = state; }
-                await ActAsync(state, screen, ct);
+                await ActAsync(state, screen, detections, ct);
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { Log($"[Error] {ex.Message}"); }
         }
         await troopLoop.ConfigureAwait(false);
+        _yolo?.Dispose();
         Log("BattleManager stopped.");
     }
 
@@ -131,17 +146,43 @@ public class BattleManager
 
     private string _lastActivity = "";
 
-    private ScreenState DetectScreen(Bitmap bmp)
+    private static bool Has(List<YoloDetection> d, params string[] classes)
+        => d.Any(x => classes.Contains(x.ClassName));
+
+    private static YoloDetection? Get(List<YoloDetection> d, params string[] classes)
+        => d.FirstOrDefault(x => classes.Contains(x.ClassName));
+
+    private ScreenState DetectScreen(Bitmap bmp, List<YoloDetection> d)
     {
-        if (DebugDetect)
+        // YOLO detect những class đã train — chỉ dùng kết quả khi có detection
+        if (_yolo != null && d.Count > 0)
         {
-            var act = _adb.GetCurrentActivity();
-            if (act != _lastActivity)
-            {
-                _lastActivity = act;
-                Log($"[D] Activity: {act}");
-            }
+            if (Has(d, "batter_rs_victory_crown", "batter_rs_lose", "batter_rs_continue")
+                && !Has(d, "base_attack", "base_community", "base_food", "base_gold", "base_gem"))
+                return ScreenState.BattleResult;
+            if (Has(d, "inbatte_pause"))
+                return ScreenState.InBattle;
+            if (Has(d, "prepare4battle_label", "prepare4battle_attack"))
+                return ScreenState.PrepareScreen;
+            if (Has(d, "favorite_player_list_label"))
+                return ScreenState.PlayerListScreen;
+            if (Has(d, "community_label_favorites"))
+                return ScreenState.FavoritesScreen;
+            if (Has(d, "community_label"))
+                return ScreenState.CommunityScreen;
+            if (Has(d, "not_enough_food_label", "not_enough_food_getfood"))
+                return ScreenState.NotEnoughFood;
+            if (Has(d, "chamber_tap_2_continue"))
+                return ScreenState.FortuneTapToContinue;
+            if (Has(d, "chamber_getit", "chamber_giveup"))
+                return ScreenState.FortuneItemPopup;
+            if (Has(d, "chamber_chest"))
+                return ScreenState.ChambersOfFortune;
+            if (Has(d, "base_community", "base_gold", "base_attack", "base_food"))
+                return ScreenState.AtBase;
         }
+
+        // Template matching cho những màn chưa có YOLO data
         if (IsVictoryOrDefeat(bmp))      return ScreenState.BattleResult;
         if (IsInBattle(bmp))             return ScreenState.InBattle;
         if (IsPrepareScreen(bmp))        return ScreenState.PrepareScreen;
@@ -159,7 +200,15 @@ public class BattleManager
 
     // ── Act per screen ────────────────────────────────────────────────────────
 
-    private async Task ActAsync(ScreenState state, Bitmap screen, CancellationToken ct)
+    private void TapDetection(List<YoloDetection> d, Bitmap screen, params string[] classes)
+    {
+        var det = Get(d, classes);
+        if (det != null) { _adb.TapScaled(det.Center.X, det.Center.Y, screen.Width, screen.Height); return; }
+        // fallback: template matching
+        TapTemplate(screen, classes.Select(c => c + ".png").ToArray());
+    }
+
+    private async Task ActAsync(ScreenState state, Bitmap screen, List<YoloDetection> d, CancellationToken ct)
     {
         switch (state)
         {
@@ -169,27 +218,38 @@ public class BattleManager
 
             case ScreenState.BattleResult:
                 Log("Battle result → tapping CONTINUE.");
-                TapTemplate(screen, TplContinueBtn);
+                var contBtn = Get(d, "batter_rs_continue");
+                if (contBtn != null)
+                    _adb.TapScaled(contBtn.Center.X, contBtn.Center.Y, screen.Width, screen.Height);
+                else
+                {
+                    var (cf, cpt, cc) = Match(screen, TplContinueBtn, 0.40);
+                    Log($"continue_btn conf={cc:F3}");
+                    if (cf) _adb.TapScaled(cpt.X, cpt.Y, screen.Width, screen.Height);
+                    else _adb.TapRatio(0.5, 0.88); // hardcoded bottom-center fallback
+                }
                 await Task.Delay(2000, ct);
                 break;
 
             case ScreenState.PrepareScreen:
                 Log("Prepare screen confirmed → tapping ATTACK!");
-                TapPrepareAttack(screen);
+                var prepareBtn = Get(d, "prepare4battle_attack");
+                if (prepareBtn != null) _adb.TapScaled(prepareBtn.Center.X, prepareBtn.Center.Y, screen.Width, screen.Height);
+                else TapPrepareAttack(screen);
                 _battleStartAt = DateTime.Now;
                 await Task.Delay(2000, ct);
                 break;
 
             case ScreenState.PlayerListScreen:
                 Log("Player list confirmed → finding attack button.");
-                TapFirstAttackButton(screen);
+                TapFirstAttackButton(screen, d);
                 await Task.Delay(2500, ct);
                 break;
 
             case ScreenState.FavoritesScreen:
                 Log("Favorites confirmed → tapping OPEN.");
                 TapFavoritesOpen(screen);
-                await Task.Delay(5000, ct); // chờ player list load
+                await Task.Delay(5000, ct);
                 break;
 
             case ScreenState.CommunityScreen:
@@ -206,25 +266,37 @@ public class BattleManager
 
             case ScreenState.NotEnoughFood:
                 Log("Not enough food → tapping COLLECT.");
-                TapTemplate(screen, TplNotEnoughFoodCollect);
+                var foodBtn = Get(d, "not_enough_food_getfood");
+                if (foodBtn != null) _adb.TapScaled(foodBtn.Center.X, foodBtn.Center.Y, screen.Width, screen.Height);
+                else TapTemplate(screen, TplNotEnoughFoodCollect);
                 await Task.Delay(2000, ct);
                 break;
 
             case ScreenState.FortuneTapToContinue:
                 Log("Fortune: tap to continue.");
-                TapTemplate(screen, TplFortuneTapContinue);
+                var tapContinue = Get(d, "chamber_tap_2_continue");
+                if (tapContinue != null) _adb.TapScaled(tapContinue.Center.X, tapContinue.Center.Y, screen.Width, screen.Height);
+                else TapTemplate(screen, TplFortuneTapContinue);
                 await Task.Delay(1500, ct);
                 break;
 
             case ScreenState.FortuneItemPopup:
                 Log("Fortune: tapping GET IT / GIVE UP.");
-                TapTemplate(screen, TplFortuneGetIt, TplFortuneGiveUp);
+                var fortuneBtn = Get(d, "chamber_getit", "chamber_giveup");
+                if (fortuneBtn != null) _adb.TapScaled(fortuneBtn.Center.X, fortuneBtn.Center.Y, screen.Width, screen.Height);
+                else TapTemplate(screen, TplFortuneGetIt, TplFortuneGiveUp);
                 await Task.Delay(1500, ct);
                 break;
 
             case ScreenState.ChambersOfFortune:
                 Log("Fortune: picking a chest.");
-                TapFirstChest(screen);
+                var chests = d.Where(x => x.ClassName == "chamber_chest").ToList();
+                if (chests.Count > 0)
+                {
+                    var pick = chests[Random.Shared.Next(chests.Count)];
+                    _adb.TapScaled(pick.Center.X, pick.Center.Y, screen.Width, screen.Height);
+                }
+                else TapFirstChest(screen);
                 await Task.Delay(2000, ct);
                 break;
 
@@ -237,7 +309,11 @@ public class BattleManager
                 if (DateTime.Now - _lastAtBaseTap >= AtBaseCooldown)
                 {
                     Log("At base → tapping community icon.");
-                    _adb.TapRatio(_cfg.CommunityIconXRatio, _cfg.CommunityIconYRatio);
+                    var communityBtn = Get(d, "base_community");
+                    if (communityBtn != null)
+                        _adb.TapScaled(communityBtn.Center.X, communityBtn.Center.Y, screen.Width, screen.Height);
+                    else
+                        _adb.TapRatio(_cfg.CommunityIconXRatio, _cfg.CommunityIconYRatio);
                     _lastAtBaseTap    = DateTime.Now;
                     _lastCommunityTap = DateTime.Now;
                 }
@@ -312,16 +388,50 @@ public class BattleManager
         _adb.TapRatio(_cfg.AttackButtonXRatio, _cfg.AttackButtonYRatio);
     }
 
-    private void TapFirstAttackButton(Bitmap screen)
+    private static bool IsAttackButtonActive(Bitmap bmp, int cx, int cy)
     {
-        var (found, pt, _) = Match(screen, TplAttackBtn, 0.72);
-        if (!found)
+        int sampleX = Math.Max(0, cx - 60);
+        int sampleY = Math.Clamp(cy, 0, bmp.Height - 1);
+        var c = bmp.GetPixel(sampleX, sampleY);
+        return c.B > 130 && c.B > c.R + 20 && c.G > 100;
+    }
+
+    private void TapFirstAttackButton(Bitmap screen, List<YoloDetection> d)
+    {
+        // YOLO: lấy tất cả nút attack, filter active bằng màu nền
+        if (_yolo != null)
         {
-            var (disFound, _, _) = Match(screen, TplAttackBtnDisable, 0.72);
-            if (disFound) { Log("Attack disabled → going back."); _adb.TapRatio(0.877, 0.120); return; }
-            Log("Attack button not found — skipping.");
+            var attacks = d.Where(x => x.ClassName == "favorite_player_list_attack")
+                           .Where(x => IsAttackButtonActive(screen, x.Center.X, x.Center.Y))
+                           .OrderBy(x => x.BBox.Y)
+                           .ToList();
+            if (attacks.Count > 0)
+            {
+                var pick = attacks.First();
+                Log($"Tapping attack at ({pick.Center.X},{pick.Center.Y}).");
+                _adb.TapScaled(pick.Center.X, pick.Center.Y, screen.Width, screen.Height);
+                return;
+            }
+            Log("YOLO: no attack buttons → falling back to template.");
+        }
+
+        // Fallback template matching — dùng template nút kiếm trong player list
+        using var tpl = ImageMatcher.LoadTemplate(TplPlayerListAttackBtn)
+                     ?? ImageMatcher.LoadTemplate(TplAttackBtn);
+        if (tpl == null) { Log("player_list_attack template missing."); return; }
+
+        var (_, _, bestConf) = ImageMatcher.FindTemplate(screen, tpl, 0.01f);
+        Log($"player_list_attack best conf={bestConf:F3} (thr=0.50)");
+
+        var allPts = ImageMatcher.FindAllTemplates(screen, tpl, 0.50);
+        if (allPts.Count == 0)
+        {
+            Log("Template miss → tapping hardcoded first row attack.");
+            _adb.TapRatio(0.877, 0.280); // nút kiếm hàng đầu tiên
             return;
         }
+        var pt = allPts.OrderBy(p => p.Y).First();
+        Log($"Tapping attack at ({pt.X},{pt.Y}).");
         _adb.TapScaled(pt.X, pt.Y, screen.Width, screen.Height);
     }
 

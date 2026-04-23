@@ -52,7 +52,7 @@ partial class MainForm
         grpControl.Text      = "Control";
         grpControl.ForeColor = Color.WhiteSmoke;
         grpControl.Location  = new Point(12, 12);
-        grpControl.Size      = new Size(760, 80);
+        grpControl.Size      = new Size(760, 90);
         grpControl.Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
 
         // Mode radio buttons
@@ -97,16 +97,28 @@ partial class MainForm
 
         // Status label
         lblStatus.Text      = "Idle";
-        lblStatus.Location  = new Point(620, 30);
+        lblStatus.Location  = new Point(500, 30);
         lblStatus.AutoSize  = true;
         lblStatus.ForeColor = Color.Gray;
         lblStatus.Font      = new Font("Segoe UI", 9f, FontStyle.Italic);
 
+        var btnCollect = new Button
+        {
+            Text      = "📷 Data",
+            Location  = new Point(665, 20),
+            Size      = new Size(80, 36),
+            BackColor = Color.FromArgb(60, 60, 100),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat,
+        };
+        btnCollect.FlatAppearance.BorderSize = 0;
+        btnCollect.Click += (_, _) => new DataCollectForm(_cfg).Show(this);
+
         grpControl.Controls.AddRange(new Control[]
-            { rbBaseOnly, rbBattleOnly, rbBoth, btnStart, btnStop, lblStatus });
+            { rbBaseOnly, rbBattleOnly, rbBoth, btnStart, btnStop, lblStatus, btnCollect });
 
         // ── Log RichTextBox ───────────────────────────────────────────────────
-        rtbLog.Location    = new Point(12, 104);
+        rtbLog.Location    = new Point(12, 114);
         rtbLog.Size        = new Size(760, 380);
         rtbLog.Anchor      = AnchorStyles.Top | AnchorStyles.Bottom
                            | AnchorStyles.Left | AnchorStyles.Right;
