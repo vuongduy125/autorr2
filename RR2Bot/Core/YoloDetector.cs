@@ -17,57 +17,53 @@ public class YoloDetector : IDisposable
     private readonly string[] _classNames;
     private readonly int _inputSize;
 
-    // Order matches Roboflow export alphabetical sort of original numeric class IDs + 2 new named classes
-    // '0','1','10','11',...,'9','favorite_player_list_attack','favorite_player_list_label'
+    // Order matches new clean Roboflow dataset (44 classes, alphabetical)
     public static readonly string[] ClassNames =
     [
-        "base_alliance",              // 0  ← '0'
-        "base_attack",               // 1  ← '1'
-        "base_social",               // 2  ← '10'
-        "base_upgrade",              // 3  ← '11'
-        "batter_rs_continue",        // 4  ← '12'
-        "batter_rs_lose",            // 5  ← '13'
-        "batter_rs_victory_crown",   // 6  ← '14'
-        "chamber_chest",             // 7  ← '15'
-        "chamber_getit",             // 8  ← '16'
-        "chamber_giveup",            // 9  ← '17'
-        "chamber_opened",            // 10 ← '18'
-        "chamber_sell",              // 11 ← '19'
-        "base_collect_resources",    // 12 ← '2'
-        "chamber_tap_2_continue",    // 13 ← '20'
-        "community_label",           // 14 ← '21'
-        "community_label_favorites", // 15 ← '22'
-        "community_label_friends",   // 16 ← '23'
-        "community_label_google_play",// 17 ← '24'
-        "community_label_history",   // 18 ← '25'
-        "community_label_insta-troops",// 19 ← '26'
-        "community_label_leaderboard",// 20 ← '27'
-        "favorite_player_list_attack",// 21 ← '28'
-        "favorite_player_list_label",// 22 ← '29'
-        "base_community",            // 23 ← '3'
-        "inbatte_ally_heal",         // 24 ← '30'
-        "inbatte_enemy_castle",      // 25 ← '31'
-        "inbatte_enemy_heal",        // 26 ← '32'
-        "inbatte_gold_bar",          // 27 ← '33'
-        "inbatte_hero_heal",         // 28 ← '34'
-        "inbatte_hero_skill",        // 29 ← '35'
-        "inbatte_honk",              // 30 ← '36'
-        "inbatte_mana_bar",          // 31 ← '37'
-        "inbatte_pause",             // 32 ← '38'
-        "inbatte_summon",            // 33 ← '39'
-        "base_food",                 // 34 ← '4'
-        "not_enough_food_getfood",   // 35 ← '40'
-        "not_enough_food_label",     // 36 ← '41'
-        "prepare4battle_attack",     // 37 ← '42'
-        "prepare4battle_label",      // 38 ← '43'
-        "unknown_loading",           // 39 ← '44'
-        "base_gem",                  // 40 ← '5'
-        "base_gift",                 // 41 ← '6'
-        "base_gold",                 // 42 ← '7'
-        "base_pearl",                // 43 ← '8'
-        "base_quest",                // 44 ← '9'
-        "favorite_player_list_attack",// 45 ← new annotation
-        "favorite_player_list_label",// 46 ← new annotation
+        "base_alliance",              // 0
+        "base_attack",               // 1
+        "base_collect_resources",    // 2
+        "base_community",            // 3
+        "base_food",                 // 4
+        "base_gem",                  // 5
+        "base_gift",                 // 6
+        "base_gold",                 // 7
+        "base_pearl",                // 8
+        "base_quest",                // 9
+        "base_upgrade",              // 10
+        "batter_rs_lose",            // 11
+        "battle_result_continue",    // 12
+        "battle_result_label",       // 13
+        "battle_result_lose",        // 14
+        "battle_result_win",         // 15
+        "chamber_chest",             // 16
+        "chamber_giveup",            // 17
+        "chamber_label",             // 18
+        "chamber_tap_2_continue",    // 19
+        "community_label",           // 20
+        "community_label_favorites", // 21
+        "community_label_friends",   // 22
+        "community_label_google_play",// 23
+        "community_label_history",   // 24
+        "community_label_insta-troops",// 25
+        "community_label_leaderboard",// 26
+        "favorite_player_list_attack",// 27
+        "favorite_player_list_label",// 28
+        "inbatte_ally_heal",         // 29
+        "inbatte_enemy_castle",      // 30
+        "inbatte_enemy_heal",        // 31
+        "inbatte_gold_bar",          // 32
+        "inbatte_hero_heal",         // 33
+        "inbatte_hero_skill",        // 34
+        "inbatte_honk",              // 35
+        "inbatte_mana_bar",          // 36
+        "inbatte_pause",             // 37
+        "inbatte_summon",            // 38
+        "not_enough_food_collect",   // 39
+        "not_enough_food_getfood",   // 40
+        "not_enough_food_label",     // 41
+        "prepare4battle_attack",     // 42
+        "prepare4battle_label",      // 43
     ];
 
     public YoloDetector(string modelPath, int inputSize = 512)
