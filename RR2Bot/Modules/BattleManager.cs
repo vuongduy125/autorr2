@@ -92,8 +92,9 @@ public class BattleManager
     private DateTime _battleStartAt;
     private DateTime _lastAtBaseTap        = DateTime.MinValue;
     private DateTime _lastCommunityTap     = DateTime.MinValue;
-    private static readonly TimeSpan AtBaseCooldown      = TimeSpan.FromSeconds(8);
-    private static readonly TimeSpan CommunityOpenWindow = TimeSpan.FromSeconds(12);
+    private bool     _communityHasSwiped   = false;
+    private static readonly TimeSpan AtBaseCooldown        = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan CommunityOpenWindow   = TimeSpan.FromSeconds(12);
 
     // ── Main loop ─────────────────────────────────────────────────────────────
 
@@ -165,44 +166,41 @@ public class BattleManager
                 return ScreenState.InBattle;
             if (Has(d, "prepare4battle_label", "prepare4battle_attack"))
                 return ScreenState.PrepareScreen;
-            if (Has(d, "favorite_player_list_label"))
+            if (Has(d, "favorite_player_list_label", "favorite_player_list_attack")
+                && !Has(d, "base_attack", "base_community", "base_food", "base_gold", "base_gem"))
                 return ScreenState.PlayerListScreen;
             if (Has(d, "community_label_favorites"))
                 return ScreenState.FavoritesScreen;
             if (Has(d, "community_label"))
-            {
-                var favConf = d.Where(x => x.ClassName == "community_label_favorites").Select(x => x.Confidence).FirstOrDefault();
-                if (DebugDetect) Log($"[D] community_label_favorites YOLO conf={favConf:F2}");
-                return IsFavoritesScreen(bmp) ? ScreenState.FavoritesScreen : ScreenState.CommunityScreen;
-            }
+                return ScreenState.CommunityScreen;
             if (Has(d, "not_enough_food_label", "not_enough_food_getfood", "not_enough_food_collect"))
                 return ScreenState.NotEnoughFood;
             if (Has(d, "chamber_tap_2_continue")
                 && !Has(d, "base_attack", "base_community", "base_food", "base_gold", "base_gem"))
                 return ScreenState.FortuneTapToContinue;
-            if (Has(d, "chamber_giveup", "chamber_label")
-                && !Has(d, "base_attack", "base_community", "base_food", "base_gold", "base_gem"))
-                return ScreenState.FortuneItemPopup;
             if (Has(d, "chamber_chest")
                 && !Has(d, "base_attack", "base_community", "base_food", "base_gold", "base_gem"))
                 return ScreenState.ChambersOfFortune;
+            if (Has(d, "chamber_giveup")
+                && !Has(d, "base_attack", "base_community", "base_food", "base_gold", "base_gem"))
+                return ScreenState.FortuneItemPopup;
             if (Has(d, "base_community", "base_gold", "base_attack", "base_food"))
                 return ScreenState.AtBase;
         }
 
-        // Template matching cho những màn chưa có YOLO data
-        if (IsVictoryOrDefeat(bmp))      return ScreenState.BattleResult;
-        if (IsInBattle(bmp))             return ScreenState.InBattle;
-        if (IsPrepareScreen(bmp))        return ScreenState.PrepareScreen;
-        if (IsPlayerListScreen(bmp))     return ScreenState.PlayerListScreen;
-        if (IsFavoritesScreen(bmp))      return ScreenState.FavoritesScreen;
-        if (IsCommunityScreen(bmp))      return ScreenState.CommunityScreen;
-        if (IsHeroDead(bmp))             return ScreenState.HeroDead;
-        if (IsNotEnoughFood(bmp))        return ScreenState.NotEnoughFood;
-        if (IsFortuneTapToContinue(bmp)) return ScreenState.FortuneTapToContinue;
-        if (IsFortuneItemPopup(bmp))     return ScreenState.FortuneItemPopup;
-        if (IsChambersOfFortune(bmp))    return ScreenState.ChambersOfFortune;
-        if (IsAtBase(bmp))               return ScreenState.AtBase;
+        // Template matching fallback — tạm comment để test YOLO 100%
+        // if (IsVictoryOrDefeat(bmp))      return ScreenState.BattleResult;
+        // if (IsInBattle(bmp))             return ScreenState.InBattle;
+        // if (IsPrepareScreen(bmp))        return ScreenState.PrepareScreen;
+        // if (IsPlayerListScreen(bmp))     return ScreenState.PlayerListScreen;
+        // if (IsFavoritesScreen(bmp))      return ScreenState.FavoritesScreen;
+        // if (IsCommunityScreen(bmp))      return ScreenState.CommunityScreen;
+        // if (IsHeroDead(bmp))             return ScreenState.HeroDead;
+        // if (IsNotEnoughFood(bmp))        return ScreenState.NotEnoughFood;
+        // if (IsFortuneTapToContinue(bmp)) return ScreenState.FortuneTapToContinue;
+        // if (IsFortuneItemPopup(bmp))     return ScreenState.FortuneItemPopup;
+        // if (IsChambersOfFortune(bmp))    return ScreenState.ChambersOfFortune;
+        // if (IsAtBase(bmp))               return ScreenState.AtBase;
         return ScreenState.Unknown;
     }
 
@@ -211,9 +209,7 @@ public class BattleManager
     private void TapDetection(List<YoloDetection> d, Bitmap screen, params string[] classes)
     {
         var det = Get(d, classes);
-        if (det != null) { _adb.TapScaled(det.Center.X, det.Center.Y, screen.Width, screen.Height); return; }
-        // fallback: template matching
-        TapTemplate(screen, classes.Select(c => c + ".png").ToArray());
+        if (det != null) _adb.TapScaled(det.Center.X, det.Center.Y, screen.Width, screen.Height);
     }
 
     private async Task ActAsync(ScreenState state, Bitmap screen, List<YoloDetection> d, CancellationToken ct)
@@ -230,12 +226,7 @@ public class BattleManager
                 if (contBtn != null)
                     _adb.TapScaled(contBtn.Center.X, contBtn.Center.Y, screen.Width, screen.Height);
                 else
-                {
-                    var (cf, cpt, cc) = Match(screen, TplContinueBtn, 0.40);
-                    Log($"continue_btn conf={cc:F3}");
-                    if (cf) _adb.TapScaled(cpt.X, cpt.Y, screen.Width, screen.Height);
-                    else _adb.TapRatio(0.5, 0.88); // hardcoded bottom-center fallback
-                }
+                    _adb.TapRatio(0.5, 0.88);
                 await Task.Delay(2000, ct);
                 break;
 
@@ -243,7 +234,7 @@ public class BattleManager
                 Log("Prepare screen confirmed → tapping ATTACK!");
                 var prepareBtn = Get(d, "prepare4battle_attack");
                 if (prepareBtn != null) _adb.TapScaled(prepareBtn.Center.X, prepareBtn.Center.Y, screen.Width, screen.Height);
-                else TapPrepareAttack(screen);
+                else _adb.TapRatio(_cfg.AttackButtonXRatio, _cfg.AttackButtonYRatio);
                 _battleStartAt = DateTime.Now;
                 await Task.Delay(2000, ct);
                 break;
@@ -256,14 +247,48 @@ public class BattleManager
 
             case ScreenState.FavoritesScreen:
                 Log("Favorites confirmed → tapping OPEN.");
-                TapFavoritesOpen(screen);
+                var favLabel = Get(d, "community_label_favorites");
+                if (favLabel != null)
+                {
+                    // OPEN button nằm cùng cột với label, gần cuối card (~83% chiều cao màn hình)
+                    int openX = favLabel.Center.X;
+                    int openY = (int)(screen.Height * 0.83);
+                    Log($"Tapping OPEN at ({openX},{openY}).");
+                    _adb.TapScaled(openX, openY, screen.Width, screen.Height);
+                }
+                else
+                    _adb.TapRatio(_cfg.FavoritesOpenXRatio, _cfg.FavoritesOpenYRatio);
                 await Task.Delay(5000, ct);
                 break;
 
             case ScreenState.CommunityScreen:
-                Log("Community screen → swiping to Favorites.");
+                if (_communityHasSwiped)
+                {
+                    await Task.Delay(1500, ct);
+                    break;
+                }
+                Log("Community screen → swiping 2x to Favorites.");
+                _communityHasSwiped = true;
                 _adb.SwipeRatio(0.95, _cfg.CommunitySwipeYRatio, 0.05, _cfg.CommunitySwipeYRatio, 900);
-                await Task.Delay(1000, ct);
+                await Task.Delay(600, ct);
+                _adb.SwipeRatio(0.95, _cfg.CommunitySwipeYRatio, 0.05, _cfg.CommunitySwipeYRatio, 900);
+                await Task.Delay(800, ct);
+                using (var snap = ScreenCapture.CaptureWindow(_cfg.WindowTitle))
+                {
+                    if (snap != null)
+                    {
+                        var snapD = _yolo?.Detect(snap, 0.01f) ?? [];
+                        Log($"snap all: {string.Join(", ", snapD.Select(x => $"{x.ClassName}({x.Confidence:F2})"))}");
+                        var favDet = snapD.FirstOrDefault(x => x.ClassName == "community_label_favorites");
+                        Log($"community_label_favorites conf={(favDet != null ? favDet.Confidence.ToString("F2") : "not found")}");
+                        if (favDet != null && favDet.Confidence >= 0.30f)
+                        {
+                            Log("Favorites detected → tapping OPEN.");
+                            _adb.TapRatio(_cfg.FavoritesOpenXRatio, _cfg.FavoritesOpenYRatio);
+                            await Task.Delay(5000, ct);
+                        }
+                    }
+                }
                 break;
 
             case ScreenState.HeroDead:
@@ -276,7 +301,7 @@ public class BattleManager
                 Log("Not enough food → tapping COLLECT.");
                 var foodBtn = Get(d, "not_enough_food_getfood", "not_enough_food_collect");
                 if (foodBtn != null) _adb.TapScaled(foodBtn.Center.X, foodBtn.Center.Y, screen.Width, screen.Height);
-                else TapTemplate(screen, TplNotEnoughFoodCollect);
+                else Log("Food button not found by YOLO.");
                 await Task.Delay(2000, ct);
                 break;
 
@@ -284,7 +309,7 @@ public class BattleManager
                 Log("Fortune: tap to continue.");
                 var tapContinue = Get(d, "chamber_tap_2_continue");
                 if (tapContinue != null) _adb.TapScaled(tapContinue.Center.X, tapContinue.Center.Y, screen.Width, screen.Height);
-                else TapTemplate(screen, TplFortuneTapContinue);
+                else Log("chamber_tap_2_continue not found by YOLO.");
                 await Task.Delay(1500, ct);
                 break;
 
@@ -292,7 +317,7 @@ public class BattleManager
                 Log("Fortune: tapping GET IT / GIVE UP.");
                 var fortuneBtn = Get(d, "chamber_giveup");
                 if (fortuneBtn != null) _adb.TapScaled(fortuneBtn.Center.X, fortuneBtn.Center.Y, screen.Width, screen.Height);
-                else TapTemplate(screen, TplFortuneGetIt, TplFortuneGiveUp);
+                else Log("Fortune button not found by YOLO.");
                 await Task.Delay(1500, ct);
                 break;
 
@@ -306,6 +331,19 @@ public class BattleManager
                 }
                 else TapFirstChest(screen);
                 await Task.Delay(2000, ct);
+                using (var snap = ScreenCapture.CaptureWindow(_cfg.WindowTitle))
+                {
+                    if (snap != null)
+                    {
+                        var snapD = _yolo?.Detect(snap, 0.30f) ?? [];
+                        var cont = Get(snapD, "chamber_tap_2_continue");
+                        if (cont != null)
+                        {
+                            Log("Fortune: tap to continue after chest.");
+                            _adb.TapScaled(cont.Center.X, cont.Center.Y, snap.Width, snap.Height);
+                        }
+                    }
+                }
                 break;
 
             case ScreenState.Unknown:
@@ -314,6 +352,7 @@ public class BattleManager
 
             case ScreenState.AtBase:
             default:
+                _communityHasSwiped = false;
                 if (DateTime.Now - _lastAtBaseTap >= AtBaseCooldown)
                 {
                     Log("At base → tapping community icon.");
@@ -386,103 +425,20 @@ public class BattleManager
     private bool IsCommunityScreen(Bitmap bmp)
         => IsCommunityOpen(bmp);
 
-    // ── Tap OPEN button trên Favorites ────────────────────────────────────────
-
-    private void TapPrepareAttack(Bitmap screen)
-    {
-        var (found, pt, _) = Match(screen, TplPrepareAttackBtn);
-        if (found) { _adb.TapScaled(pt.X, pt.Y, screen.Width, screen.Height); return; }
-        Log("ATTACK! not found → tapping hardcoded.");
-        _adb.TapRatio(_cfg.AttackButtonXRatio, _cfg.AttackButtonYRatio);
-    }
-
-    private static bool IsAttackButtonActive(Bitmap bmp, int cx, int cy)
-    {
-        // Sample ngay tại center của button — active có nền xanh dương, inactive có nền xám
-        int x = Math.Clamp(cx, 0, bmp.Width - 1);
-        int y = Math.Clamp(cy, 0, bmp.Height - 1);
-        var c = bmp.GetPixel(x, y);
-        return c.B > 120 && c.B > c.R + 15;
-    }
-
     private void TapFirstAttackButton(Bitmap screen, List<YoloDetection> d)
     {
-        // YOLO: lấy tất cả nút attack, filter active bằng màu nền
-        if (_yolo != null)
+        var attacks = d.Where(x => x.ClassName == "favorite_player_list_attack")
+                       .OrderBy(x => x.BBox.Y)
+                       .ToList();
+        if (attacks.Count > 0)
         {
-            var attacks = d.Where(x => x.ClassName == "favorite_player_list_attack")
-                           .Where(x => IsAttackButtonActive(screen, x.Center.X, x.Center.Y))
-                           .OrderBy(x => x.BBox.Y)
-                           .ToList();
-            if (attacks.Count > 0)
-            {
-                var pick = attacks.First();
-                Log($"Tapping attack at ({pick.Center.X},{pick.Center.Y}).");
-                _adb.TapScaled(pick.Center.X, pick.Center.Y, screen.Width, screen.Height);
-                return;
-            }
-            Log("YOLO: no attack buttons → falling back to template.");
-        }
-
-        // Fallback template matching — dùng template nút kiếm trong player list
-        using var tpl = ImageMatcher.LoadTemplate(TplPlayerListAttackBtn)
-                     ?? ImageMatcher.LoadTemplate(TplAttackBtn);
-        if (tpl == null) { Log("player_list_attack template missing."); return; }
-
-        var (_, _, bestConf) = ImageMatcher.FindTemplate(screen, tpl, 0.01f);
-        Log($"player_list_attack best conf={bestConf:F3} (thr=0.50)");
-
-        var allPts = ImageMatcher.FindAllTemplates(screen, tpl, 0.50);
-        Log($"Template found {allPts.Count} buttons.");
-        if (allPts.Count == 0) { Log("No buttons found → closing list."); _adb.TapRatio(0.877, 0.120); return; }
-        var activePts = allPts.OrderBy(p => p.Y).ToList();
-        var pt = activePts.First();
-        Log($"Tapping attack at ({pt.X},{pt.Y}).");
-        _adb.TapScaled(pt.X, pt.Y, screen.Width, screen.Height);
-    }
-
-    private void TapFavoritesOpen(Bitmap screen)
-    {
-        using var openTpl = ImageMatcher.LoadTemplate(TplOpenBtn);
-        using var cardTpl = ImageMatcher.LoadTemplate(TplFavoritesCard);
-
-        if (openTpl == null)
-        {
-            Log("No open_btn.png → tapping hardcoded.");
-            _adb.TapRatio(_cfg.FavoritesOpenXRatio, _cfg.FavoritesOpenYRatio);
+            var pick = attacks.First();
+            Log($"Tapping attack at ({pick.Center.X},{pick.Center.Y}).");
+            _adb.TapScaled(pick.Center.X, pick.Center.Y, screen.Width, screen.Height);
             return;
         }
-
-        var opens = ImageMatcher.FindAllTemplates(screen, openTpl, 0.75);
-        if (opens.Count == 0)
-        {
-            Log("OPEN button not found → tapping hardcoded.");
-            _adb.TapRatio(_cfg.FavoritesOpenXRatio, _cfg.FavoritesOpenYRatio);
-            return;
-        }
-
-        Point best;
-        if (cardTpl != null)
-        {
-            var (cf, cardPt, _) = ImageMatcher.FindTemplate(screen, cardTpl, 0.72);
-            if (cf)
-            {
-                var below = opens.Where(p => p.Y > cardPt.Y).ToList();
-                best = below.Count > 0
-                    ? below.OrderBy(p => p.Y).First()
-                    : opens.OrderBy(p => p.Y).First();
-            }
-            else
-            {
-                best = opens.OrderBy(p => p.Y).First();
-            }
-        }
-        else
-        {
-            best = opens.OrderBy(p => p.Y).First();
-        }
-
-        _adb.TapScaled(best.X, best.Y, screen.Width, screen.Height);
+        Log("No attack buttons found → closing list.");
+        _adb.TapRatio(0.877, 0.120);
     }
 
     // ── In-battle logic ───────────────────────────────────────────────────────
