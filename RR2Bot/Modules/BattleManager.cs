@@ -117,7 +117,7 @@ public class BattleManager
 
         var isBase = Has(d, "base_attack", "base_community", "base_food", "base_gold", "base_gem");
 
-        if (Has(d, "battle_result_label", "battle_result_win", "battle_result_lose", "battle_result_continue", "batter_rs_lose")
+        if (Has(d, "battle_result_label", "battle_result_win", "battle_result_lose", "battle_result_continue", "battle_result_retreat", "batter_rs_lose")
             && !isBase)
             return ScreenState.BattleResult;
         if (Has(d, "inbatte_pause") && !isBase)
@@ -132,7 +132,7 @@ public class BattleManager
             return ScreenState.NotEnoughFood;
         if (Has(d, "chamber_tap_2_continue") && !isBase)
             return ScreenState.FortuneTapToContinue;
-        if (Has(d, "chamber_giveup") && !isBase)
+        if (Has(d, "chamber_getit", "chamber_giveup", "chamber_sell") && !isBase)
             return ScreenState.FortuneItemPopup;
         if (Has(d, "chamber_chest") && !isBase)
             return ScreenState.ChambersOfFortune;
@@ -149,16 +149,35 @@ public class BattleManager
         switch (state)
         {
             case ScreenState.InBattle:
+                var retreatMidBattle = Get(d, "battle_result_retreat");
+                if (retreatMidBattle != null)
+                {
+                    Log("Hero died → tapping RETREAT.");
+                    _adb.TapScaled(retreatMidBattle.Center.X, retreatMidBattle.Center.Y, screen.Width, screen.Height);
+                    await Task.Delay(2000, ct);
+                    break;
+                }
                 await DoBattleAsync(screen, ct);
                 break;
 
             case ScreenState.BattleResult:
-                Log("Battle result → tapping CONTINUE.");
-                var contBtn = Get(d, "battle_result_continue");
+                var contBtn    = Get(d, "battle_result_continue");
+                var retreatBtn = Get(d, "battle_result_retreat");
                 if (contBtn != null)
+                {
+                    Log("Battle result → tapping CONTINUE.");
                     _adb.TapScaled(contBtn.Center.X, contBtn.Center.Y, screen.Width, screen.Height);
+                }
+                else if (retreatBtn != null)
+                {
+                    Log("Battle result → hero died, tapping RETREAT.");
+                    _adb.TapScaled(retreatBtn.Center.X, retreatBtn.Center.Y, screen.Width, screen.Height);
+                }
                 else
+                {
+                    Log("Battle result → no button found, tapping fallback.");
                     _adb.TapRatio(0.5, 0.88);
+                }
                 await Task.Delay(2000, ct);
                 break;
 
@@ -232,12 +251,12 @@ public class BattleManager
                 break;
 
             case ScreenState.FortuneItemPopup:
-                Log("Fortune: tapping GIVE UP.");
-                var fortuneBtn = Get(d, "chamber_giveup");
+                Log("Fortune: tapping GET IT / GIVE UP.");
+                var fortuneBtn = Get(d, "chamber_getit", "chamber_giveup", "chamber_sell");
                 if (fortuneBtn != null)
                     _adb.TapScaled(fortuneBtn.Center.X, fortuneBtn.Center.Y, screen.Width, screen.Height);
                 else
-                    Log("chamber_giveup not found.");
+                    Log("Fortune button not found.");
                 await Task.Delay(1500, ct);
                 break;
 
@@ -292,18 +311,37 @@ public class BattleManager
 
     private void TapFirstAttackButton(Bitmap screen, List<YoloDetection> d)
     {
-        var attacks = d.Where(x => x.ClassName == "favorite_player_list_attack")
-                       .OrderBy(x => x.BBox.Y)
+        var attacks = d.Where(x => x.ClassName == "favorite_player_list_attack" && x.Confidence >= 0.7f)
                        .ToList();
         if (attacks.Count > 0)
         {
-            var pick = attacks.First();
+            // Pick the enabled button (gold/yellow swords) — disabled button is gray
+            var pick = attacks.OrderByDescending(x => CountWarmPixels(screen, x.BBox))
+                              .ThenByDescending(x => x.Confidence)
+                              .First();
             Log($"Tapping attack at ({pick.Center.X},{pick.Center.Y}).");
             _adb.TapScaled(pick.Center.X, pick.Center.Y, screen.Width, screen.Height);
             return;
         }
         Log("No attack buttons found → closing list.");
         _adb.TapRatio(0.877, 0.120);
+    }
+
+    private static int CountWarmPixels(Bitmap bmp, RectangleF bbox)
+    {
+        var px = LockPixels(bmp, out int stride);
+        int x1 = Math.Max(0, (int)bbox.X),         y1 = Math.Max(0, (int)bbox.Y);
+        int x2 = Math.Min(bmp.Width,  (int)bbox.Right), y2 = Math.Min(bmp.Height, (int)bbox.Bottom);
+        int count = 0;
+        for (int y = y1; y < y2; y++)
+        for (int x = x1; x < x2; x++)
+        {
+            int i = y * stride + x * 4;
+            byte b = px[i], g = px[i + 1], r = px[i + 2];
+            // Warm/golden: R high, G moderate, B low
+            if (r > 180 && g > 90 && b < 80 && r > g + 50) count++;
+        }
+        return count;
     }
 
     // ── In-battle logic ───────────────────────────────────────────────────────

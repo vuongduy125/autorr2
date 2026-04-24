@@ -20,57 +20,64 @@ public class YoloDetector : IDisposable
     // Order matches new clean Roboflow dataset (44 classes, alphabetical)
     public static readonly string[] ClassNames =
     [
-        "base_alliance",              // 0
-        "base_attack",               // 1
-        "base_collect_resources",    // 2
-        "base_community",            // 3
-        "base_food",                 // 4
-        "base_gem",                  // 5
-        "base_gift",                 // 6
-        "base_gold",                 // 7
-        "base_pearl",                // 8
-        "base_quest",                // 9
-        "base_upgrade",              // 10
-        "batter_rs_lose",            // 11
-        "battle_result_continue",    // 12
-        "battle_result_label",       // 13
-        "battle_result_lose",        // 14
-        "battle_result_win",         // 15
-        "chamber_chest",             // 16
-        "chamber_giveup",            // 17
-        "chamber_label",             // 18
-        "chamber_tap_2_continue",    // 19
-        "community_label",           // 20
-        "community_label_favorites", // 21
-        "community_label_friends",   // 22
-        "community_label_google_play",// 23
-        "community_label_history",   // 24
-        "community_label_insta-troops",// 25
-        "community_label_leaderboard",// 26
-        "favorite_player_list_attack",// 27
-        "favorite_player_list_label",// 28
-        "inbatte_ally_heal",         // 29
-        "inbatte_enemy_castle",      // 30
-        "inbatte_enemy_heal",        // 31
-        "inbatte_gold_bar",          // 32
-        "inbatte_hero_heal",         // 33
-        "inbatte_hero_skill",        // 34
-        "inbatte_honk",              // 35
-        "inbatte_mana_bar",          // 36
-        "inbatte_pause",             // 37
-        "inbatte_summon",            // 38
-        "not_enough_food_collect",   // 39
-        "not_enough_food_getfood",   // 40
-        "not_enough_food_label",     // 41
-        "prepare4battle_attack",     // 42
-        "prepare4battle_label",      // 43
+        "base_alliance",               // 0
+        "base_attack",                 // 1
+        "base_collect_resources",      // 2
+        "base_community",              // 3
+        "base_food",                   // 4
+        "base_gem",                    // 5
+        "base_gift",                   // 6
+        "base_gold",                   // 7
+        "base_pearl",                  // 8
+        "base_quest",                  // 9
+        "base_upgrade",                // 10
+        "batter_rs_lose",              // 11
+        "battle_result_continue",      // 12
+        "battle_result_label",         // 13
+        "battle_result_lose",          // 14
+        "battle_result_retreat",       // 15 NEW
+        "battle_result_win",           // 16
+        "chamber_chest",               // 17
+        "chamber_getit",               // 18 NEW
+        "chamber_giveup",              // 19
+        "chamber_label",               // 20
+        "chamber_sell",                // 21 NEW
+        "chamber_tap_2_continue",      // 22
+        "community_label",             // 23
+        "community_label_favorites",   // 24
+        "community_label_friends",     // 25
+        "community_label_google_play", // 26
+        "community_label_history",     // 27
+        "community_label_insta-troops",// 28
+        "community_label_leaderboard", // 29
+        "favorite_player_list_attack", // 30
+        "favorite_player_list_label",  // 31
+        "inbatte_ally_heal",           // 32
+        "inbatte_enemy_castle",        // 33
+        "inbatte_enemy_heal",          // 34
+        "inbatte_gold_bar",            // 35
+        "inbatte_hero_heal",           // 36
+        "inbatte_hero_skill",          // 37
+        "inbatte_honk",                // 38
+        "inbatte_mana_bar",            // 39
+        "inbatte_pause",               // 40
+        "inbatte_summon",              // 41
+        "not_enough_food_collect",     // 42
+        "not_enough_food_getfood",     // 43
+        "not_enough_food_label",       // 44
+        "prepare4battle_attack",       // 45
+        "prepare4battle_label",        // 46
     ];
 
     public YoloDetector(string modelPath, int inputSize = 512)
     {
-        _session   = new InferenceSession(modelPath);
+        _session    = new InferenceSession(modelPath);
         _classNames = ClassNames;
         _inputSize  = inputSize;
+
+        // Warm-up: force JIT compile trước khi dùng thật
+        using var dummy = new Bitmap(inputSize, inputSize);
+        Detect(dummy, 0.99f);
     }
 
     public List<YoloDetection> Detect(Bitmap bmp, float confThreshold = 0.5f)
