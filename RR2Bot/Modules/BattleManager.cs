@@ -54,12 +54,15 @@ public class BattleManager
     private DateTime _battleStartAt;
     private DateTime _lastAtBaseTap    = DateTime.MinValue;
     private bool     _communityHasSwiped = false;
+
     private static readonly TimeSpan AtBaseCooldown = TimeSpan.FromSeconds(8);
 
     // ── Main loop ─────────────────────────────────────────────────────────────
 
     private volatile ScreenState _lastLoggedState = ScreenState.Unknown;
     private volatile bool _inBattle = false;
+    private List<YoloDetection> _latestDetections = [];
+    private int _latestScreenW, _latestScreenH;
 
     public async Task RunAsync(CancellationToken ct)
     {
@@ -74,6 +77,9 @@ public class BattleManager
 
                 // Chạy YOLO 1 lần — dùng cho cả detect lẫn act
                 var detections = _yolo?.Detect(screen, 0.30f) ?? [];
+                _latestDetections = detections;
+                _latestScreenW = screen.Width;
+                _latestScreenH = screen.Height;
                 if (DebugDetect && detections.Count > 0)
                     Log($"[D] YOLO: {string.Join(", ", detections.Select(d => $"{d.ClassName}({d.Confidence:F2})"))}");
 
@@ -96,7 +102,7 @@ public class BattleManager
             try
             {
                 if (_inBattle)
-                    SummonTroops();
+                    SummonTroops(_latestDetections, _latestScreenW, _latestScreenH);
                 await Task.Delay(100, ct);
             }
             catch (OperationCanceledException) { break; }
@@ -366,9 +372,8 @@ public class BattleManager
 
         if (hpLow)
         {
-            Log("HP low! Moving to fixed target and using skills.");
+            Log("HP low! Moving to fixed target.");
             _adb.LongPress(1162, 184, 2000);
-            UseReadySpells(screen);
         }
         else if (enemyFound)
         {
@@ -402,9 +407,8 @@ public class BattleManager
         }
         else
         {
-            Log("No enemy found → Moving to fixed target (1162, 184).");
+            Log("No enemy found → Moving to fixed target.");
             _adb.LongPress(1162, 184, 3000);
-            UseReadySpells(screen);
         }
 
         await Task.Delay(_cfg.BattleLoopIntervalMs, ct);
@@ -414,6 +418,18 @@ public class BattleManager
 
     public bool UseReadySpells(Bitmap? screen = null)
     {
+        var skills = _latestDetections.Where(x => x.ClassName == "inbatte_hero_skill").ToList();
+        if (skills.Count > 0 && _latestScreenW > 0)
+        {
+            foreach (var skill in skills)
+            {
+                _adb.TapScaled(skill.Center.X, skill.Center.Y, _latestScreenW, _latestScreenH);
+                Thread.Sleep(80);
+            }
+            return true;
+        }
+
+        // fallback: template gate + hardcoded ratios
         if (screen != null)
         {
             using var gate = ImageMatcher.LoadTemplate(TplSpellReady);
@@ -431,8 +447,15 @@ public class BattleManager
         return true;
     }
 
-    public void SummonTroops()
+    public void SummonTroops(List<YoloDetection> d, int screenW, int screenH)
     {
+        var summons = d.Where(x => x.ClassName == "inbatte_summon").ToList();
+        if (summons.Count > 0)
+        {
+            var pick = summons[Random.Shared.Next(summons.Count)];
+            _adb.TapScaled(pick.Center.X, pick.Center.Y, screenW, screenH);
+            return;
+        }
         foreach (var (x, y) in _cfg.TroopButtonRatios)
         {
             _adb.TapRatio(x, y);
@@ -440,10 +463,7 @@ public class BattleManager
         }
     }
 
-    // ── Hero movement ─────────────────────────────────────────────────────────
 
-    private void MoveToward(double targetX, double targetY)
-        => _adb.LongPress((int)(targetX * _adb.ScreenWidth), (int)(targetY * _adb.ScreenHeight), 5000);
 
     // ── Enemy HP bar (pixel scan) ─────────────────────────────────────────────
 
