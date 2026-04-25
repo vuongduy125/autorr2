@@ -59,6 +59,7 @@ public class BattleManager
     // ── Main loop ─────────────────────────────────────────────────────────────
 
     private volatile ScreenState _lastLoggedState = ScreenState.Unknown;
+    private volatile bool _inBattle = false;
 
     public async Task RunAsync(CancellationToken ct)
     {
@@ -94,9 +95,9 @@ public class BattleManager
         {
             try
             {
-                if (_lastLoggedState == ScreenState.InBattle)
+                if (_inBattle)
                     SummonTroops();
-                await Task.Delay(500, ct);
+                await Task.Delay(100, ct);
             }
             catch (OperationCanceledException) { break; }
             catch { /* ignored */ }
@@ -122,10 +123,11 @@ public class BattleManager
             return ScreenState.BattleResult;
         if (Has(d, "inbatte_pause") && !isBase)
             return ScreenState.InBattle;
-        if (Has(d, "prepare4battle_label", "prepare4battle_attack"))
-            return ScreenState.PrepareScreen;
         if (Has(d, "favorite_player_list_label", "favorite_player_list_attack") && !isBase)
             return ScreenState.FavoritesScreen;
+        if (Has(d, "prepare4battle_label", "prepare4battle_attack")
+            && !Has(d, "favorite_player_list_attack", "favorite_player_list_label"))
+            return ScreenState.PrepareScreen;
         if (Has(d, "community_label_favorites") || Has(d, "community_label"))
             return ScreenState.CommunityScreen;
         if (Has(d, "not_enough_food_label", "not_enough_food_getfood", "not_enough_food_collect"))
@@ -149,6 +151,7 @@ public class BattleManager
         switch (state)
         {
             case ScreenState.InBattle:
+                _inBattle = true;
                 var retreatMidBattle = Get(d, "battle_result_retreat");
                 if (retreatMidBattle != null)
                 {
@@ -161,6 +164,7 @@ public class BattleManager
                 break;
 
             case ScreenState.BattleResult:
+                _inBattle = false;
                 var contBtn    = Get(d, "battle_result_continue");
                 var retreatBtn = Get(d, "battle_result_retreat");
                 if (contBtn != null)
@@ -315,12 +319,20 @@ public class BattleManager
                        .ToList();
         if (attacks.Count > 0)
         {
-            // Pick the enabled button (gold/yellow swords) — disabled button is gray
-            var pick = attacks.OrderByDescending(x => CountWarmPixels(screen, x.BBox))
-                              .ThenByDescending(x => x.Confidence)
-                              .First();
-            Log($"Tapping attack at ({pick.Center.X},{pick.Center.Y}).");
-            _adb.TapScaled(pick.Center.X, pick.Center.Y, screen.Width, screen.Height);
+            // Enabled button has gold swords (warm pixels); disabled is silver/gray
+            const int WarmThreshold = 80;
+            var enabled = attacks.Where(x => CountWarmPixels(screen, x.BBox) >= WarmThreshold)
+                                 .OrderByDescending(x => x.Confidence)
+                                 .ToList();
+            if (enabled.Count > 0)
+            {
+                var pick = enabled.First();
+                Log($"Tapping attack at ({pick.Center.X},{pick.Center.Y}).");
+                _adb.TapScaled(pick.Center.X, pick.Center.Y, screen.Width, screen.Height);
+                return;
+            }
+            Log("All visible attack buttons disabled → scrolling down for more players.");
+            _adb.SwipeRatio(0.5, 0.70, 0.5, 0.30, 400);
             return;
         }
         Log("No attack buttons found → closing list.");
