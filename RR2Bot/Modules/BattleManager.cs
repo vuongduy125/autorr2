@@ -366,14 +366,21 @@ public class BattleManager
 
             if (distPx <= StopRangePx)
             {
-                Log($"Enemy nearby (dist: {distPx:F1}px) → Stopping to use skills.");
-                UseReadySpells(screen);
+                bool usedSkill = UseReadySpells(screen);
+                if (usedSkill)
+                {
+                    Log($"Enemy nearby (dist: {distPx:F1}px) → Stopping to use skills.");
+                }
+                else
+                {
+                    Log($"Enemy nearby but no skills ready → Moving closer for normal attack.");
+                    _adb.LongPress(1162, 184, 1000);
+                }
             }
             else
             {
                 Log($"Enemy detected (dist: {distPx:F1}px) → Pathfinding to enemy.");
                 // Dùng Tap thay vì LongPress tại vị trí enemy để kích hoạt pathfinding của game
-                // LongPress tại vị trí enemy đôi khi khiến nhân vật đứng im nếu game không hiểu lệnh
                 _adb.TapRatio(ex, ey); 
                 
                 // Đồng thời vẫn duy trì lệnh di chuyển cố định để không bị khựng
@@ -393,7 +400,7 @@ public class BattleManager
 
     // ── Spell / Troop ─────────────────────────────────────────────────────────
 
-    public void UseReadySpells(Bitmap? screen = null)
+    public bool UseReadySpells(Bitmap? screen = null)
     {
         if (screen != null)
         {
@@ -401,7 +408,7 @@ public class BattleManager
             if (gate != null)
             {
                 var (anyReady, _, _) = ImageMatcher.FindTemplate(screen, gate, 0.75);
-                if (!anyReady) return;
+                if (!anyReady) return false;
             }
         }
         foreach (var (x, y) in _cfg.SpellButtonRatios)
@@ -409,6 +416,7 @@ public class BattleManager
             _adb.TapRatio(x, y);
             Thread.Sleep(80);
         }
+        return true;
     }
 
     public void SummonTroops()
