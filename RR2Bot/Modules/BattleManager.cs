@@ -246,7 +246,19 @@ public class BattleManager
                 if (foodBtn != null)
                     _adb.TapScaled(foodBtn.Center.X, foodBtn.Center.Y, screen.Width, screen.Height);
                 else
-                    Log("Food button not found by YOLO.");
+                {
+                    var exitFallback = Get(d, "unknown_x_exit");
+                    if (exitFallback != null)
+                    {
+                        Log("Food button not found → tapping X to close popup.");
+                        _adb.TapScaled(exitFallback.Center.X, exitFallback.Center.Y, screen.Width, screen.Height);
+                    }
+                    else
+                    {
+                        Log("Food button not found → tapping fallback COLLECT position.");
+                        _adb.TapRatio(0.61, 0.57);
+                    }
+                }
                 await Task.Delay(2000, ct);
                 break;
 
@@ -296,6 +308,12 @@ public class BattleManager
                 break;
 
             case ScreenState.Unknown:
+                var exitBtn = Get(d, "unknown_x_exit");
+                if (exitBtn != null)
+                {
+                    Log("Unknown screen → tapping X exit.");
+                    _adb.TapScaled(exitBtn.Center.X, exitBtn.Center.Y, screen.Width, screen.Height);
+                }
                 await Task.Delay(1500, ct);
                 break;
 

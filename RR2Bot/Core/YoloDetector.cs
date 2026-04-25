@@ -67,6 +67,7 @@ public class YoloDetector : IDisposable
         "not_enough_food_label",       // 44
         "prepare4battle_attack",       // 45
         "prepare4battle_label",        // 46
+        "unknown_x_exit",              // 47
     ];
 
     public YoloDetector(string modelPath, int inputSize = 512)
