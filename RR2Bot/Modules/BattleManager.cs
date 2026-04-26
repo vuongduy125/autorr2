@@ -386,47 +386,25 @@ public class BattleManager
     {
         bool hpLow   = IsHpLow(screen);
         bool inGrace = (DateTime.Now - _battleStartAt).TotalSeconds < 5;
-        var (enemyFound, ex, ey, distPx) = inGrace ? (false, 0.0, 0.0, 0.0) : FindEnemyHpBar(screen);
+        var (enemyFound, ex, ey) = inGrace ? (false, 0.0, 0.0) : FindEnemyHpBar(screen);
 
         if (hpLow)
         {
-            Log("HP low! Moving to fixed target.");
-            _adb.LongPress(1162, 184, 2000);
+            Log("HP low! Retreating.");
+            UseReadySpells(screen);
+            _adb.TapRatio(0.39, 0.64);
         }
         else if (enemyFound)
         {
-            // Khoảng cách để dừng di chuyển và dùng skill (pixel)
-            // 30px là khoảng cách hợp lý để bắt đầu xả skill
-            const double StopRangePx = 30.0; 
-
-            if (distPx <= StopRangePx)
-            {
-                bool usedSkill = UseReadySpells(screen);
-                if (usedSkill)
-                {
-                    Log($"Enemy nearby (dist: {distPx:F1}px) → Stopping to use skills.");
-                }
-                else
-                {
-                    Log($"Enemy nearby but no skills ready → Moving closer for normal attack.");
-                    _adb.LongPress(1162, 184, 1000);
-                }
-            }
-            else
-            {
-                Log($"Enemy detected (dist: {distPx:F1}px) → Pathfinding to enemy.");
-                // Dùng Tap thay vì LongPress tại vị trí enemy để kích hoạt pathfinding của game
-                _adb.TapRatio(ex, ey); 
-                
-                // Đồng thời vẫn duy trì lệnh di chuyển cố định để không bị khựng
-                _adb.LongPress(1162, 184, 1000);
-                UseReadySpells(screen);
-            }
+            Log($"Enemy at ({ex:F2},{ey:F2}) → moving in.");
+            MoveToward(ex, ey);
+            UseReadySpells(screen);
         }
         else
         {
-            Log("No enemy found → Moving to fixed target.");
-            _adb.LongPress(1162, 184, 3000);
+            double jx = _cfg.HeroTargetXRatio + (Random.Shared.NextDouble() - 0.5) * 0.08;
+            double jy = _cfg.HeroTargetYRatio + (Random.Shared.NextDouble() - 0.5) * 0.08;
+            MoveToward(jx, jy);
         }
 
         await Task.Delay(_cfg.BattleLoopIntervalMs, ct);
@@ -482,108 +460,61 @@ public class BattleManager
     }
 
 
+    private void MoveToward(double targetX, double targetY)
+        => _adb.LongPress((int)(targetX * _adb.ScreenWidth), (int)(targetY * _adb.ScreenHeight), 1500);
 
     // ── Enemy HP bar (pixel scan) ─────────────────────────────────────────────
 
-    private (bool found, double x, double y, double dist) FindEnemyHpBar(Bitmap screen)
+    private (bool found, double x, double y) FindEnemyHpBar(Bitmap screen)
     {
         var px = LockPixels(screen, out int stride);
         int w = screen.Width, h = screen.Height;
         int x1 = (int)(w * 0.10), x2 = (int)(w * 0.90);
         int y1 = (int)(h * 0.10), y2 = (int)(h * 0.60);
 
-        // Helper để check màu
-        bool IsRed(byte r, byte g, byte b) => r > 150 && g < 70 && b < 70;
-        bool IsBlack(byte r, byte g, byte b) => r < 60 && g < 60 && b < 60;
-        bool IsGreen(byte r, byte g, byte b) => g > 150 && r < 120 && b < 120;
-
         var candidates = new List<(int midX, int midY, int streak)>();
         for (int y = y1; y < y2; y++)
         {
-            int streak = 0, streakStart = 0, redCount = 0;
-            int rowBase = y * stride;
+            int streak = 0, streakStart = 0, rowBase = y * stride;
             for (int x = x1; x < x2; x++)
             {
                 int i = rowBase + x * 4;
                 byte b = px[i], g = px[i + 1], r = px[i + 2];
-
-                bool red = IsRed(r, g, b);
-                bool black = IsBlack(r, g, b);
-
-                if (red || black)
-                {
-                    if (streak == 0) streakStart = x;
-                    streak++;
-                    if (red) redCount++;
-                }
-                else
-                {
-                    if (streak >= 10 && redCount >= 3)
-                    {
-                        candidates.Add(((streakStart + x) / 2, y, streak));
-                    }
-                    streak = 0;
-                    redCount = 0;
-                }
+                if (r > 160 && g < 55 && b < 55) { if (streak == 0) streakStart = x; streak++; }
+                else { if (streak >= 8) candidates.Add(((streakStart + x) / 2, y, streak)); streak = 0; }
             }
-            if (streak >= 10 && redCount >= 3)
-                candidates.Add(((streakStart + x2) / 2, y, streak));
+            if (streak >= 8) candidates.Add(((streakStart + x2) / 2, y, streak));
         }
 
-        if (candidates.Count == 0) return (false, 0, 0, 0);
+        if (candidates.Count == 0) return (false, 0, 0);
 
+        // Lọc spell effects (dày dọc > 8px)
         var bars = new List<(int midX, int midY, int streak)>();
         foreach (var c in candidates)
         {
-            // 1. Kiểm tra độ dày dọc (loại bỏ spell effects)
             int contig = 1;
             for (int dy = -1; dy >= -10; dy--)
             {
                 int sy = c.midY + dy; if (sy < 0) break;
                 int ci = sy * stride + c.midX * 4;
-                if (IsRed(px[ci + 2], px[ci + 1], px[ci]) || IsBlack(px[ci + 2], px[ci + 1], px[ci])) contig++;
-                else break;
+                if (px[ci + 2] > 150 && px[ci + 1] < 80 && px[ci] < 80) contig++; else break;
             }
             for (int dy = 1; dy <= 10; dy++)
             {
                 int sy = c.midY + dy; if (sy >= h) break;
                 int ci = sy * stride + c.midX * 4;
-                if (IsRed(px[ci + 2], px[ci + 1], px[ci]) || IsBlack(px[ci + 2], px[ci + 1], px[ci])) contig++;
-                else break;
+                if (px[ci + 2] > 150 && px[ci + 1] < 80 && px[ci] < 80) contig++; else break;
             }
-            if (contig > 8) continue;
-
-            // 2. Kiểm tra thanh máu xanh lá phía trên (loại bỏ thú cưỡi của player/ally)
-            bool hasGreenAbove = false;
-            // Quét vùng từ 15px đến 40px phía trên thanh máu đỏ
-            for (int dy = -15; dy >= -40; dy--)
-            {
-                int sy = c.midY + dy; if (sy < 0) break;
-                int greenStreak = 0;
-                // Quét ngang một khoảng nhỏ quanh midX
-                for (int dx = -20; dx <= 20; dx++)
-                {
-                    int sx = c.midX + dx; if (sx < 0 || sx >= w) continue;
-                    int ci = sy * stride + sx * 4;
-                    if (IsGreen(px[ci + 2], px[ci + 1], px[ci])) greenStreak++;
-                }
-                if (greenStreak >= 8) { hasGreenAbove = true; break; }
-            }
-
-            if (!hasGreenAbove) bars.Add(c);
+            if (contig <= 8) bars.Add(c);
         }
 
-        if (bars.Count == 0) return (false, 0, 0, 0);
+        if (bars.Count == 0) return (false, 0, 0);
 
-        double hx = w * 0.5, hy = h * 0.7; 
-        var best = bars.MinBy(c => Math.Pow(c.midX - hx, 2) + Math.Pow(c.midY - hy, 2));
-        
-        // Tính khoảng cách thực tế theo pixel
-        double distPx = Math.Sqrt(Math.Pow(best.midX - hx, 2) + Math.Pow(best.midY - hy, 2));
-
+        double cx = w * 0.5, cy = h * 0.5;
+        var best = bars.MinBy(c => Math.Pow(c.midX - cx, 2) + Math.Pow(c.midY - cy, 2));
         double rx = best.midX / (double)w;
         double ry = Math.Min((best.midY + 50.0) / h, 0.85);
-        return (true, rx, ry, distPx);
+        return (true, rx, ry);
     }
 
     // ── Hero HP (pixel scan) ──────────────────────────────────────────────────
