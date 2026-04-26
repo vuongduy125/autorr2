@@ -412,7 +412,7 @@ public class BattleManager
 
     // ── Spell / Troop ─────────────────────────────────────────────────────────
 
-    public bool UseReadySpells(Bitmap? screen = null)
+    public void UseReadySpells(Bitmap? screen = null)
     {
         var skills = _latestDetections.Where(x => x.ClassName == "inbatte_hero_skill").ToList();
         if (skills.Count > 0 && _latestScreenW > 0)
@@ -422,7 +422,7 @@ public class BattleManager
                 _adb.TapScaled(skill.Center.X, skill.Center.Y, _latestScreenW, _latestScreenH);
                 Thread.Sleep(80);
             }
-            return true;
+            return;
         }
 
         // fallback: template gate + hardcoded ratios
@@ -432,7 +432,7 @@ public class BattleManager
             if (gate != null)
             {
                 var (anyReady, _, _) = ImageMatcher.FindTemplate(screen, gate, 0.75);
-                if (!anyReady) return false;
+                if (!anyReady) return;
             }
         }
         foreach (var (x, y) in _cfg.SpellButtonRatios)
@@ -440,7 +440,6 @@ public class BattleManager
             _adb.TapRatio(x, y);
             Thread.Sleep(80);
         }
-        return true;
     }
 
     public void SummonTroops(List<YoloDetection> d, int screenW, int screenH)
@@ -469,7 +468,7 @@ public class BattleManager
     {
         var px = LockPixels(screen, out int stride);
         int w = screen.Width, h = screen.Height;
-        int x1 = (int)(w * 0.10), x2 = (int)(w * 0.90);
+        int x1 = (int)(w * 0.40), x2 = (int)(w * 0.90);
         int y1 = (int)(h * 0.10), y2 = (int)(h * 0.60);
 
         var candidates = new List<(int midX, int midY, int streak)>();
