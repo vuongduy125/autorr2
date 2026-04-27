@@ -65,6 +65,10 @@ public class BattleManager
     private int    _enemyLostFrames  = 0;
     private const int EnemyGraceFrames = 4;
 
+    // Movement loop target (updated by YOLO loop, executed by MoveLoopAsync)
+    private volatile bool   _moveEnabled = false;
+    private double _moveTargetX = 0.5, _moveTargetY = 0.5;
+
 
     private static readonly TimeSpan AtBaseCooldown = TimeSpan.FromSeconds(8);
 
@@ -79,6 +83,7 @@ public class BattleManager
     {
         Log(_yolo != null ? "BattleManager started (YOLO mode)." : "BattleManager started (template mode).");
         var troopLoop = Task.Run(() => TroopSummonLoopAsync(ct), ct);
+        var moveLoop  = Task.Run(() => MoveLoopAsync(ct), ct);
         while (!ct.IsCancellationRequested)
         {
             try
@@ -102,6 +107,7 @@ public class BattleManager
             catch (Exception ex) { Log($"[Error] {ex.Message}"); }
         }
         await troopLoop.ConfigureAwait(false);
+        await moveLoop.ConfigureAwait(false);
         _yolo?.Dispose();
         Log("BattleManager stopped.");
     }
@@ -114,7 +120,24 @@ public class BattleManager
             {
                 if (_inBattle)
                     SummonTroops(_latestDetections, _latestScreenW, _latestScreenH);
-                await Task.Delay(100, ct);
+                await Task.Delay(600, ct);
+            }
+            catch (OperationCanceledException) { break; }
+            catch { /* ignored */ }
+        }
+    }
+
+    private async Task MoveLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (_moveEnabled)
+                    _adb.LongPress((int)(_moveTargetX * _adb.ScreenWidth),
+                                   (int)(_moveTargetY * _adb.ScreenHeight), 200);
+                else
+                    await Task.Delay(50, ct);
             }
             catch (OperationCanceledException) { break; }
             catch { /* ignored */ }
@@ -140,7 +163,9 @@ public class BattleManager
             return ScreenState.BattleResult;
         if (Has(d, "inbatte_pause") && !isBase)
             return ScreenState.InBattle;
-        if (Has(d, "favorite_player_list_label", "favorite_player_list_attack") && !isBase)
+        if (Has(d, "favorite_player_list_label", "favorite_player_list_attack")
+            && !isBase
+            && !Has(d, "community_label", "community_label_favorites"))
             return ScreenState.FavoritesScreen;
         if (Has(d, "prepare4battle_label", "prepare4battle_attack")
             && !Has(d, "favorite_player_list_attack", "favorite_player_list_label"))
@@ -182,6 +207,7 @@ public class BattleManager
 
             case ScreenState.BattleResult:
                 _inBattle = false;
+                _moveEnabled = false;
                 var contBtn    = Get(d, "battle_result_continue");
                 var retreatBtn = Get(d, "battle_result_retreat");
                 if (contBtn != null)
@@ -402,16 +428,24 @@ public class BattleManager
         if (!inGrace && _latestScreenW > 0)
             enemy = _latestDetections
                 .Where(x => x.ClassName == "inbatte_enemy_heal"
-                         && x.Confidence >= 0.7f
-                         && x.Center.Y / (double)_latestScreenH > 0.25)
+                         && x.Confidence >= 0.35f
+                         && x.Center.Y / (double)_latestScreenH > 0.12)
                 .OrderByDescending(x => x.Confidence)
                 .FirstOrDefault();
         bool enemyFound = enemy != null;
         double ex = enemy != null ? enemy.Center.X / (double)_latestScreenW : 0.0;
         double ey = enemy != null ? enemy.Center.Y / (double)_latestScreenH : 0.0;
 
+        if (enemyFound && (DateTime.Now - _lastEnemySnap).TotalSeconds >= 1)
+        {
+            _lastEnemySnap = DateTime.Now;
+            Directory.CreateDirectory(SnapDir);
+            AutoSaveSnap(screen, _latestDetections);
+        }
+
         if (hpLow)
         {
+            _moveEnabled = false;
             Log("HP low! Retreating.");
             UseReadySpells(screen);
             _adb.TapRatio(0.39, 0.64);
@@ -423,31 +457,23 @@ public class BattleManager
             else { _smoothEX = alpha * ex + (1 - alpha) * _smoothEX; _smoothEY = alpha * ey + (1 - alpha) * _smoothEY; }
             _hasSmoothedEnemy = true;
             _enemyLostFrames  = 0;
-            Log($"ENEMY AT ({ex:F2},{ey:F2}) smooth→({_smoothEX:F2},{_smoothEY:F2}) MOVING IN.");
-
-            if ((DateTime.Now - _lastEnemySnap).TotalSeconds >= 3)
-            {
-                _lastEnemySnap = DateTime.Now;
-                Directory.CreateDirectory(SnapDir);
-                AutoSaveSnap(screen, _latestDetections);
-            }
-
-            MoveToward(_smoothEX, _smoothEY);
+            _moveEnabled = false;
+            Log($"ENEMY AT ({ex:F2},{ey:F2}) — holding position, using spells.");
             UseReadySpells(screen);
         }
         else if (_hasSmoothedEnemy && _enemyLostFrames < EnemyGraceFrames)
         {
             _enemyLostFrames++;
-            Log($"ENEMY GRACE {_enemyLostFrames}/{EnemyGraceFrames} → holding toward ({_smoothEX:F2},{_smoothEY:F2}).");
-            MoveToward(_smoothEX, _smoothEY);
+            _moveEnabled = false;
+            Log($"ENEMY GRACE {_enemyLostFrames}/{EnemyGraceFrames} — holding position.");
             UseReadySpells(screen);
         }
         else
         {
             _hasSmoothedEnemy = false;
-            double jx = _cfg.HeroTargetXRatio + (Random.Shared.NextDouble() - 0.5) * 0.08;
-            double jy = _cfg.HeroTargetYRatio + (Random.Shared.NextDouble() - 0.5) * 0.08;
-            MoveToward(jx, jy);
+            _moveTargetX = _cfg.HeroTargetXRatio + (Random.Shared.NextDouble() - 0.5) * 0.08;
+            _moveTargetY = _cfg.HeroTargetYRatio + (Random.Shared.NextDouble() - 0.5) * 0.08;
+            _moveEnabled = true;
         }
 
         await Task.Delay(_cfg.BattleLoopIntervalMs, ct);
@@ -503,7 +529,7 @@ public class BattleManager
 
 
     private void MoveToward(double targetX, double targetY)
-        => _adb.LongPress((int)(targetX * _adb.ScreenWidth), (int)(targetY * _adb.ScreenHeight), 500);
+        => _adb.LongPress((int)(targetX * _adb.ScreenWidth), (int)(targetY * _adb.ScreenHeight), 1200);
 
     // ── Enemy HP bar (pixel scan) ─────────────────────────────────────────────
 

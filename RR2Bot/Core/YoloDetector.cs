@@ -17,7 +17,7 @@ public class YoloDetector : IDisposable
     private readonly string[] _classNames;
     private readonly int _inputSize;
 
-    // Order matches new clean Roboflow dataset (44 classes, alphabetical)
+    // Order matches new clean Roboflow dataset (48 classes, alphabetical)
     public static readonly string[] ClassNames =
     [
         "base_alliance",               // 0
