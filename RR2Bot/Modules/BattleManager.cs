@@ -63,11 +63,31 @@ public class BattleManager
     private double _smoothEX = 0.5, _smoothEY = 0.5;
     private bool   _hasSmoothedEnemy = false;
     private int    _enemyLostFrames  = 0;
-    private const int EnemyGraceFrames = 4;
+    private int    _enemyContactFrames = 0;
+    private const int EnemyGraceFrames   = 4;
+    private const double SpellRangeRatio = 0.30; // khoảng cách hero-enemy ≤ 30% màn hình → xả chiêu
 
     // Movement loop target (updated by YOLO loop, executed by MoveLoopAsync)
     private volatile bool   _moveEnabled = false;
     private double _moveTargetX = 0.5, _moveTargetY = 0.5;
+    private volatile bool _actingNow = false;
+    private int      _hpLowFrames    = 0;
+    private DateTime _lastRetreatTap      = DateTime.MinValue;
+    private DateTime _lastWanderTargetSet = DateTime.MinValue;
+    private DateTime _lastSpellUse        = DateTime.MinValue;
+    private const double SpellCooldownSecs = 1.5;
+    private int      _wanderPointIdx      = 0;
+    private const int    HpLowFramesRequired  = 3;
+    private const double WanderTargetHoldSecs = 2.0;
+
+    // Wander waypoints — tọa độ map upper-right (hướng forward ~1:30)
+    private static readonly (double X, double Y)[] WanderPoints =
+    [
+        (0.75, 0.20),
+        (0.65, 0.15),
+        (0.80, 0.25),
+        (0.70, 0.17),
+    ];
 
 
     private static readonly TimeSpan AtBaseCooldown = TimeSpan.FromSeconds(8);
@@ -120,7 +140,7 @@ public class BattleManager
             {
                 if (_inBattle)
                     SummonTroops(_latestDetections, _latestScreenW, _latestScreenH);
-                await Task.Delay(600, ct);
+                await Task.Delay(300, ct);
             }
             catch (OperationCanceledException) { break; }
             catch { /* ignored */ }
@@ -133,9 +153,14 @@ public class BattleManager
         {
             try
             {
-                if (_moveEnabled)
-                    _adb.LongPress((int)(_moveTargetX * _adb.ScreenWidth),
-                                   (int)(_moveTargetY * _adb.ScreenHeight), 200);
+                if (_moveEnabled && !_actingNow)
+                {
+                    _adb.LongPress(
+                        (int)(_moveTargetX * _adb.ScreenWidth),
+                        (int)(_moveTargetY * _adb.ScreenHeight),
+                        2500);
+                    await Task.Delay(50, ct);
+                }
                 else
                     await Task.Delay(50, ct);
             }
@@ -190,6 +215,10 @@ public class BattleManager
 
     private async Task ActAsync(ScreenState state, Bitmap screen, List<YoloDetection> d, CancellationToken ct)
     {
+        _actingNow = state is ScreenState.CommunityScreen
+                          or ScreenState.PrepareScreen
+                          or ScreenState.FavoritesScreen
+                          or ScreenState.PlayerListScreen;
         switch (state)
         {
             case ScreenState.InBattle:
@@ -236,6 +265,7 @@ public class BattleManager
                 else
                     _adb.TapRatio(_cfg.AttackButtonXRatio, _cfg.AttackButtonYRatio);
                 _battleStartAt = DateTime.Now;
+                _inBattle = true;
                 await Task.Delay(2000, ct);
                 break;
 
@@ -356,6 +386,7 @@ public class BattleManager
 
             case ScreenState.AtBase:
             default:
+                _moveEnabled = false;
                 _communityHasSwiped = false;
                 if (DateTime.Now - _lastAtBaseTap >= AtBaseCooldown)
                 {
@@ -425,54 +456,91 @@ public class BattleManager
         bool inGrace = (DateTime.Now - _battleStartAt).TotalSeconds < 5;
 
         YoloDetection? enemy = null;
+        double ex = 0.0, ey = 0.0;
+        bool enemyFound = false;
+
         if (!inGrace && _latestScreenW > 0)
+        {
             enemy = _latestDetections
                 .Where(x => x.ClassName == "inbatte_enemy_heal"
-                         && x.Confidence >= 0.35f
-                         && x.Center.Y / (double)_latestScreenH > 0.12)
+                         && x.Confidence >= 0.50f
+                         && x.Center.Y / (double)_latestScreenH > 0.02
+                         && IsRedBar(screen, x.BBox))
                 .OrderByDescending(x => x.Confidence)
                 .FirstOrDefault();
-        bool enemyFound = enemy != null;
-        double ex = enemy != null ? enemy.Center.X / (double)_latestScreenW : 0.0;
-        double ey = enemy != null ? enemy.Center.Y / (double)_latestScreenH : 0.0;
 
-        if (enemyFound && (DateTime.Now - _lastEnemySnap).TotalSeconds >= 1)
-        {
-            _lastEnemySnap = DateTime.Now;
-            Directory.CreateDirectory(SnapDir);
-            AutoSaveSnap(screen, _latestDetections);
+            if (enemy != null)
+            {
+                ex = enemy.Center.X / (double)_latestScreenW;
+                ey = enemy.Center.Y / (double)_latestScreenH;
+                enemyFound = true;
+            }
         }
+
+        // if ((DateTime.Now - _lastEnemySnap).TotalSeconds >= 0.7)
+        // {
+        //     _lastEnemySnap = DateTime.Now;
+        //     Directory.CreateDirectory(SnapDir);
+        //     AutoSaveSnap(screen, _latestDetections);
+        // }
 
         if (hpLow)
         {
-            _moveEnabled = false;
-            Log("HP low! Retreating.");
-            UseReadySpells(screen);
-            _adb.TapRatio(0.39, 0.64);
+            _hpLowFrames++;
+            if (_hpLowFrames >= HpLowFramesRequired)
+            {
+                _moveEnabled = false;
+                if ((DateTime.Now - _lastRetreatTap).TotalSeconds >= 5)
+                {
+                    Log($"HP low ({_hpLowFrames} frames) → Retreating.");
+                    _adb.TapRatio(0.39, 0.64);
+                    _lastRetreatTap = DateTime.Now;
+                }
+            }
         }
         else if (enemyFound)
         {
+            _hpLowFrames = 0;
             const double alpha = 0.35;
             if (!_hasSmoothedEnemy) { _smoothEX = ex; _smoothEY = ey; }
             else { _smoothEX = alpha * ex + (1 - alpha) * _smoothEX; _smoothEY = alpha * ey + (1 - alpha) * _smoothEY; }
-            _hasSmoothedEnemy = true;
-            _enemyLostFrames  = 0;
-            _moveEnabled = false;
-            Log($"ENEMY AT ({ex:F2},{ey:F2}) — holding position, using spells.");
-            UseReadySpells(screen);
+            _hasSmoothedEnemy   = true;
+            _enemyLostFrames    = 0;
+            _enemyContactFrames = 0;
+            _moveTargetX = _smoothEX;
+            _moveTargetY = Math.Min(_smoothEY + 0.12, 0.85);
+            _moveEnabled = true;
+            double dist = HeroEnemyDist(ex, ey);
+            bool inRange = dist <= SpellRangeRatio;
+            Log($"ENEMY AT ({ex:F2},{ey:F2}) dist={dist:F2}{(inRange ? " FIRE" : " approach")}");
+            if (inRange && (DateTime.Now - _lastSpellUse).TotalSeconds >= SpellCooldownSecs)
+            {
+                UseReadySpells(screen);
+                _lastSpellUse = DateTime.Now;
+            }
         }
         else if (_hasSmoothedEnemy && _enemyLostFrames < EnemyGraceFrames)
         {
+            _hpLowFrames = 0;
             _enemyLostFrames++;
-            _moveEnabled = false;
-            Log($"ENEMY GRACE {_enemyLostFrames}/{EnemyGraceFrames} — holding position.");
-            UseReadySpells(screen);
+            _moveTargetX = _smoothEX;
+            _moveTargetY = Math.Min(_smoothEY + 0.12, 0.85);
+            _moveEnabled = true;
+            Log($"ENEMY GRACE {_enemyLostFrames}/{EnemyGraceFrames}");
         }
         else
         {
+            _hpLowFrames      = 0;
             _hasSmoothedEnemy = false;
-            _moveTargetX = _cfg.HeroTargetXRatio + (Random.Shared.NextDouble() - 0.5) * 0.08;
-            _moveTargetY = _cfg.HeroTargetYRatio + (Random.Shared.NextDouble() - 0.5) * 0.08;
+            if ((DateTime.Now - _lastWanderTargetSet).TotalSeconds >= WanderTargetHoldSecs)
+            {
+                var wp = WanderPoints[_wanderPointIdx % WanderPoints.Length];
+                _wanderPointIdx++;
+                _moveTargetX = wp.X;
+                _moveTargetY = wp.Y;
+                _lastWanderTargetSet = DateTime.Now;
+                Log($"Wander → ({_moveTargetX:F2},{_moveTargetY:F2})");
+            }
             _moveEnabled = true;
         }
 
@@ -533,6 +601,21 @@ public class BattleManager
 
     // ── Enemy HP bar (pixel scan) ─────────────────────────────────────────────
 
+    private static double HeroEnemyDist(double enemyX, double enemyY)
+        => Math.Sqrt(Math.Pow(enemyX - 0.5, 2) + Math.Pow(enemyY - 0.5, 2));
+
+    private bool IsRedBar(Bitmap screen, RectangleF box)
+    {
+        var px = LockPixels(screen, out int stride);
+        int cx = (int)(box.X + box.Width  / 2);
+        int cy = (int)(box.Y + box.Height / 2);
+        cx = Math.Clamp(cx, 0, screen.Width  - 1);
+        cy = Math.Clamp(cy, 0, screen.Height - 1);
+        int i = cy * stride + cx * 4;
+        byte b = px[i], g = px[i + 1], r = px[i + 2];
+        return r > 130 && r > g + 50 && r > b + 50;
+    }
+
     private (bool found, double x, double y) FindEnemyHpBar(Bitmap screen)
     {
         var px = LockPixels(screen, out int stride);
@@ -589,27 +672,39 @@ public class BattleManager
 
     private bool IsHpLow(Bitmap screen)
     {
-        var px = LockPixels(screen, out int stride);
-        int w = screen.Width, h = screen.Height;
-        int x1 = (int)(w * 0.28), x2 = (int)(w * 0.72);
-        int y1 = (int)(h * 0.18), y2 = (int)(h * 0.50);
+        // Dùng YOLO tìm hero HP bar, rồi pixel scan bên trong bbox đo tỉ lệ xanh lá
+        var heroBar = _latestDetections
+            .Where(x => x.ClassName == "inbatte_hero_heal" && x.Confidence >= 0.5f)
+            .OrderByDescending(x => x.Confidence)
+            .FirstOrDefault();
 
-        int best = 0;
+        if (heroBar == null) return false; // không thấy bar → coi như ổn
+
+        var px = LockPixels(screen, out int stride);
+        int x1 = Math.Max(0, (int)heroBar.BBox.X);
+        int x2 = Math.Min(screen.Width, (int)heroBar.BBox.Right);
+        int y1 = Math.Max(0, (int)heroBar.BBox.Y);
+        int y2 = Math.Min(screen.Height, (int)heroBar.BBox.Bottom);
+        int total = x2 - x1;
+        if (total <= 0) return false;
+
+        int bestBright = 0;
         for (int y = y1; y < y2; y++)
         {
-            int streak = 0, rowBase = y * stride;
+            int bright = 0, rowBase = y * stride;
             for (int x = x1; x < x2; x++)
             {
                 int i = rowBase + x * 4;
                 byte b = px[i], g = px[i + 1], r = px[i + 2];
-                if (g > 65 && g > r + 20 && g > b + 20) streak++;
-                else { if (streak > best) best = streak; streak = 0; }
+                if (r + g + b > 150) bright++; // xanh / vàng / cam / đỏ đều tính
             }
-            if (streak > best) best = streak;
+            if (bright > bestBright) bestBright = bright;
         }
 
-        // <8 = không thấy bar; 8-50 = HP thấp; >50 = HP ổn
-        return best >= 8 && best < 50;
+        double ratio = (double)bestBright / total;
+        bool low = ratio < 0.30;
+        if (low) Log($"[HP] ratio={ratio:F2} → low");
+        return low;
     }
 
     // ── Auto snap ─────────────────────────────────────────────────────────────

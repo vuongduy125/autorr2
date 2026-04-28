@@ -13,8 +13,8 @@ public class BotConfig
     public double GoldMatchThreshold  { get; set; } = 0.65;
 
     // ── Joystick (ratio 0.0-1.0 của Android screen) ──────────────────────────
-    public double JoystickXRatio     { get; set; } = 0.125; // 200/1600
-    public double JoystickYRatio     { get; set; } = 0.889; // 800/900
+    public double JoystickXRatio     { get; set; } = 0.22;  // vùng giữa-trái, tránh summon btn
+    public double JoystickYRatio     { get; set; } = 0.55;  // giữa màn hình theo chiều dọc
     public double JoystickRadiusX    { get; set; } = 0.056; // 90/1600
     public double JoystickRadiusY    { get; set; } = 0.100; // 90/900
 
@@ -39,8 +39,8 @@ public class BotConfig
     public int    HeroMoveDurationMs { get; set; } = 800;
 
     // Tap target để hero pathfind đến — upper-right của màn hình
-    public double HeroTargetXRatio { get; set; } = 0.85;
-    public double HeroTargetYRatio { get; set; } = 0.16;
+    public double HeroTargetXRatio { get; set; } = 0.675;
+    public double HeroTargetYRatio { get; set; } = 0.33;
 
     // HP bar detection
     public double HpBarYRatio        { get; set; } = 0.30;  // y của thanh HP (≈280px/900)
