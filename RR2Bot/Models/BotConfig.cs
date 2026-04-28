@@ -72,6 +72,9 @@ public class BotConfig
     public double AttackButtonXRatio { get; set; } = 0.79;
     public double AttackButtonYRatio { get; set; } = 0.82;
 
+    // ── Player list OCR ───────────────────────────────────────────────────────
+    public string OwnPlayerName { get; set; } = ""; // tên của mình để skip
+
     // ── Loop intervals ────────────────────────────────────────────────────────
     public int BaseLoopIntervalMs   { get; set; } = 5000;
     public int BattleLoopIntervalMs { get; set; } = 0;

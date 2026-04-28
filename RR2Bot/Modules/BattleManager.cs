@@ -90,6 +90,12 @@ public class BattleManager
     ];
 
 
+    // Favorites list state
+    private int  _listScrollCount = 0;
+    private bool _listAtTop       = false;
+    private const int MaxListScroll    = 18;
+    private const int ScrollToTopCount = 6;
+
     private static readonly TimeSpan AtBaseCooldown = TimeSpan.FromSeconds(8);
 
     // ── Main loop ─────────────────────────────────────────────────────────────
@@ -271,9 +277,7 @@ public class BattleManager
 
             case ScreenState.PlayerListScreen:
             case ScreenState.FavoritesScreen:
-                Log("Favorites player list → tapping first attack.");
-                TapFirstAttackButton(screen, d);
-                await Task.Delay(2500, ct);
+                await HandleFavoritesAsync(screen, d, ct);
                 break;
 
             case ScreenState.CommunityScreen:
@@ -388,6 +392,7 @@ public class BattleManager
             default:
                 _moveEnabled = false;
                 _communityHasSwiped = false;
+                _listAtTop = false;
                 if (DateTime.Now - _lastAtBaseTap >= AtBaseCooldown)
                 {
                     Log("At base → tapping community icon.");
@@ -401,6 +406,138 @@ public class BattleManager
                 await Task.Delay(2000, ct);
                 break;
         }
+    }
+
+    // ── Favorites OCR + tracking ──────────────────────────────────────────────
+
+    private async Task HandleFavoritesAsync(Bitmap screen, List<YoloDetection> d, CancellationToken ct)
+    {
+        // Bước 1: scroll về top trước khi bắt đầu quét
+        if (!_listAtTop)
+        {
+            Log("Favorites: scrolling to top...");
+            for (int i = 0; i < ScrollToTopCount; i++)
+            {
+                _adb.SwipeRatio(0.5, 0.30, 0.5, 0.78, 280);
+                await Task.Delay(180, ct);
+            }
+            _listAtTop = true;
+            await Task.Delay(400, ct);
+            return;
+        }
+
+        // Bước 2: tìm button vàng (chưa đánh) — game tự xám button đã đánh
+        const int WarmThreshold = 80;
+        var enabled = d.Where(x => x.ClassName == "favorite_player_list_attack"
+                                && x.Confidence >= 0.7f
+                                && CountWarmPixels(screen, x.BBox) >= WarmThreshold)
+                       .OrderBy(x => x.BBox.Y)
+                       .ToList();
+
+        Log($"Favorites: {enabled.Count} attackable / {d.Count(x => x.ClassName == "favorite_player_list_attack")} total buttons");
+
+        if (enabled.Count > 0)
+        {
+            var pick = enabled.First();
+            Log($"Attacking row y={pick.Center.Y}");
+            _adb.TapScaled(pick.Center.X, pick.Center.Y, screen.Width, screen.Height);
+            _listScrollCount = 0;
+            await Task.Delay(2500, ct);
+            return;
+        }
+
+        // Bước 3: không còn button vàng → scroll xuống tìm tiếp
+        _listScrollCount++;
+        if (_listScrollCount > MaxListScroll)
+        {
+            Log("List exhausted → scroll to top for next cycle.");
+            _listScrollCount = 0;
+            _listAtTop = false;
+        }
+        else
+        {
+            Log($"No attackable buttons → scroll down ({_listScrollCount}/{MaxListScroll})");
+            _adb.SwipeRatio(0.5, 0.72, 0.5, 0.28, 350);
+            await Task.Delay(600, ct);
+        }
+    }
+
+    private OcrEngine GetOcrEngine()
+    {
+        if (_ocrEngine != null) return _ocrEngine;
+        _ocrEngine = OcrEngine.TryCreateFromUserProfileLanguages()
+                     ?? OcrEngine.TryCreateFromLanguage(new Windows.Globalization.Language("en"));
+        if (_ocrEngine == null) throw new InvalidOperationException("Windows OCR not available.");
+        return _ocrEngine;
+    }
+
+    // Fingerprint pixel vùng tên — nhận dạng player mà không cần đọc ký tự.
+    // Hoạt động với mọi ngôn ngữ: Latin, CJK, Thai, Arabic, ...
+    private string GetRowFingerprint(Bitmap screen, RectangleF attackBBox)
+    {
+        int rowH = (int)(attackBBox.Bottom - attackBBox.Y);
+        int x1 = (int)(screen.Width * 0.355);
+        int x2 = (int)(screen.Width * 0.638);
+        int y1 = Math.Max(0, (int)(attackBBox.Y - rowH * 0.90));
+        int y2 = Math.Min(screen.Height, (int)(attackBBox.Y - rowH * 0.30));
+        if (x2 <= x1 || y2 <= y1 + 5) return "";
+
+        var px = LockPixels(screen, out int stride);
+        const int cols = 24, rows = 4;
+        var sb = new System.Text.StringBuilder(cols * rows);
+        for (int gy = 0; gy < rows; gy++)
+        for (int gx = 0; gx < cols; gx++)
+        {
+            int sx = Math.Clamp(x1 + (x2 - x1) * gx / cols, 0, screen.Width - 1);
+            int sy = Math.Clamp(y1 + (y2 - y1) * gy / rows, 0, screen.Height - 1);
+            int i  = sy * stride + sx * 4;
+            float lum = 0.299f * px[i + 2] + 0.587f * px[i + 1] + 0.114f * px[i];
+            sb.Append((char)('a' + Math.Clamp((int)(lum * 25 / 255), 0, 25)));
+        }
+        return sb.ToString();
+    }
+
+    // OCR tên — chỉ dùng để log, không dùng để track (không hoạt động với ký tự non-Latin).
+    private string OcrNameForLog(Bitmap screen, RectangleF attackBBox)
+    {
+        int rowH = (int)(attackBBox.Bottom - attackBBox.Y);
+        int x1 = (int)(screen.Width * 0.355);
+        int x2 = (int)(screen.Width * 0.638);
+        int y1 = Math.Max(0, (int)(attackBBox.Y - rowH * 0.90));
+        int y2 = Math.Min(screen.Height, (int)(attackBBox.Y - rowH * 0.30));
+        if (x2 <= x1 || y2 <= y1 + 10) return "?";
+
+        try
+        {
+            var engine = GetOcrEngine();
+            using var crop   = screen.Clone(new Rectangle(x1, y1, x2 - x1, y2 - y1), screen.PixelFormat);
+            using var scaled = new Bitmap(crop, crop.Width * 3, crop.Height * 3);
+            var softBmp  = BitmapToSoftwareBitmap(scaled);
+            var result   = engine.RecognizeAsync(softBmp).GetAwaiter().GetResult();
+            softBmp.Dispose();
+            string first = result.Lines.Count > 0 ? result.Lines[0].Text.Trim() : "";
+            return string.IsNullOrWhiteSpace(first) ? "?" : first;
+        }
+        catch { return "?"; }
+    }
+
+    private static SoftwareBitmap BitmapToSoftwareBitmap(Bitmap bmp)
+    {
+        using var ms = new MemoryStream();
+        bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Bmp);
+        ms.Position = 0;
+        byte[] bytes = ms.ToArray();
+
+        var raStream = new InMemoryRandomAccessStream();
+        var writer = new DataWriter(raStream.GetOutputStreamAt(0));
+        writer.WriteBytes(bytes);
+        writer.StoreAsync().GetAwaiter().GetResult();
+        raStream.Seek(0);
+
+        var decoder = BitmapDecoder.CreateAsync(raStream).GetAwaiter().GetResult();
+        var softBmp = decoder.GetSoftwareBitmapAsync().GetAwaiter().GetResult();
+        raStream.Dispose();
+        return softBmp;
     }
 
     // ── Attack button helper ──────────────────────────────────────────────────
